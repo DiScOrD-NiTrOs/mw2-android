@@ -8,6 +8,16 @@ files are included; you need your own disc.
 
 **[Download the latest release](../../releases/latest)**
 
+## Playing online safely
+
+Play online only with people you trust. The game's 2009 network code is
+unchanged, and it has known security bugs.
+
+- There is no public matchmaking, so a stranger cannot join your game.
+- **Steam** build: only your Steam friends can join, and the game ignores
+  traffic from anyone who is not in your lobby.
+- **LAN** build: anyone on the same network can reach the game.
+
 ## Features
 
 - Campaign and multiplayer
