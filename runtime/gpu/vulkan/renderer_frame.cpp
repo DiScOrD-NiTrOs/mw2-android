@@ -225,6 +225,7 @@ namespace vk::renderer::detail
         Stopwatch waited(g.fenceNanoseconds);
         stutters::Timed timed(stutters::kGpuWaits);
         vk::record::WaitFor(slot.queuedAt);
+        report::Timed spent(report::kGpuWait);
         if (vk::pipeline::Failed(vkWaitForFences(g.device, 1, &slot.fence, VK_TRUE, UINT64_MAX),
                                  what))
             return false;

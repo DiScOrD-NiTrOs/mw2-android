@@ -3,9 +3,11 @@
 //
 // The launcher's REPORT A BUG starts the game with it. The log then names the
 // graphics driver, and ends -- at exit or at a fault -- with how the run
-// went: the frame rate, how the frame times spread, and what the renderer
-// compiled in the middle of play. Off, every call here is one load of a flag.
+// went: the frame rate, how the frame times spread, where the renderer's
+// thread spent play, and what the renderer compiled in the middle of it. Off,
+// every call here is one load of a flag.
 #include "env.h"
+#include <chrono>
 #include <cstdint>
 
 namespace report
@@ -21,5 +23,20 @@ namespace report
     // Work done at a draw that play had to wait for.
     enum Cost { kShader, kPipeline, kCostCount };
     void Add(Cost cost, uint64_t microseconds);
+    // Where the ring consumer's time goes, which says what holds a slow run
+    // back: the thread itself when it is busy all the time, the graphics chip
+    // when the busy time is waiting for it, the title when it is neither.
+    // kExecuting has the two waits in it. All three are timed on the consumer's
+    // thread, where report::Frame is called from.
+    enum Time { kExecuting, kRecorderWait, kGpuWait, kTimeCount };
+    void Spent(Time time, uint64_t nanoseconds);
+    struct Timed
+    {
+        const Time time;
+        const bool on = On();
+        std::chrono::steady_clock::time_point began;
+        explicit Timed(Time what);
+        ~Timed();
+    };
     void Write();
 }

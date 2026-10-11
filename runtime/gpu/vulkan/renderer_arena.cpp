@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <vector>
 
 #ifdef MW2_HAVE_VULKAN
 
@@ -155,8 +156,10 @@ namespace vk::renderer::detail
         }
         out.fetch = Allocate(96 * 16, kArenaConstants);
         if (out.fetch == UINT32_MAX) return out;
-        uint32_t* fetch = reinterpret_cast<uint32_t*>(g.arenaMapped + out.fetch);
-        std::memset(fetch, 0, 96 * 16);
+        // Assembled here and copied across once: the arena is write-combined
+        // memory, and the rewriting below reads back what it has just written.
+        alignas(64) uint32_t fetch[96 * 4];
+        std::memset(fetch, 0, sizeof fetch);
         for (uint32_t group = 0; group < 32; group++)
         {
             const uint32_t* source = &r.values[gpu::kConstantBaseFetch + group * 6];
@@ -204,13 +207,17 @@ namespace vk::renderer::detail
                     const uint32_t total = given + rectangles;
                     const uint32_t at = Allocate(total * stride * 4, kArenaVertices);
                     if (at == UINT32_MAX) return out;
-                    uint32_t* vertices = reinterpret_cast<uint32_t*>(g.arenaMapped + at);
+                    // The fourth corners are worked out from the other three, so
+                    // the vertices are put together here and not in the arena,
+                    // which is not memory to read back from.
+                    static std::vector<uint32_t> corners;
+                    corners.assign(size_t(total) * stride, 0);
+                    uint32_t* vertices = corners.data();
                     const uint32_t have = std::min(given * stride, declared);
                     std::memcpy(vertices, guest::Base() + va, have * 4);
-                    if (have < given * stride)
-                        std::memset(vertices + have, 0, (given * stride - have) * 4);
                     for (uint32_t rect = 0; rect < rectangles; rect++)
                         BuildFourthCorner(vertices, stride, rect, given + rect);
+                    std::memcpy(g.arenaMapped + at, vertices, corners.size() * 4);
                     if (g.drawRecord) NoteVertexWindow(guest::Base() + va, have * 4);
                     entry[0] = at | type;
                     continue;
@@ -298,6 +305,7 @@ namespace vk::renderer::detail
             g.loops = { loopStamp, 0, out.loops, true };
         }
 
+        std::memcpy(g.arenaMapped + out.fetch, fetch, sizeof fetch);
         g.fetchBlock = { fetchStamp, VertexRange(lowestVertex, highestVertex), out.fetch, true };
         std::copy(subs, subs + 3, g.fetchSubs);
         out.ok = true;

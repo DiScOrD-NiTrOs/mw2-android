@@ -4,6 +4,7 @@
 #include "title.h"
 #include "../pacing_trace.h"
 #include "../stutters.h"
+#include "../report.h"
 #include "memory_watch.h"
 #include "internal.h"
 #include "gpu.h"
@@ -123,6 +124,7 @@ namespace
                 pacing::Note(pacing::kBatchBegin, available);
                 {
                     stutters::Timed timed(stutters::kRingBatches);
+                    report::Timed spent(report::kExecuting);
                     ExecuteRing(g.ring.base, g.ring.readIndex, g.ring.mask, available);
                 }
                 pacing::Note(pacing::kBatchEnd);

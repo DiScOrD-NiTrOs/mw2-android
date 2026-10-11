@@ -202,7 +202,7 @@ namespace
         // it), and when the aim was first good.
         Clock::time_point actAt, aimedAt, pressAt;
 
-        bool everLocated = false, arrived = false, pausing = false;
+        bool everLocated = false, arrived = false;
         Point joinedFrom;                       // where the player stood when the route was chosen
         Clock::time_point pauseUntil, lastLog;
         float closest = 1e30f;
@@ -537,7 +537,6 @@ namespace
 bool player::Walking() { return Goal().set || !Routes().empty(); }
 bool player::Wanted()  { return Walking() || TracingViewpos(); }
 bool player::Arrived() { return g.arrived; }
-bool player::Pausing() { return g.pausing; }
 
 // How long the walk has been getting no nearer. Zero until the player has
 // spawned and started walking.
@@ -786,10 +785,8 @@ bool player::Steer(short axes[4], Press& press)
         axes[0] = axes[1] = axes[2] = axes[3] = 0;
         g.legAt = now;
         g.bestAt = now;
-        g.pausing = true;
         return true;
     }
-    g.pausing = false;
     if (DoAction(here, now, axes, press)) return true;
 
     const float dx = to.x - here.x, dy = to.y - here.y;

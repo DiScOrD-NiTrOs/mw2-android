@@ -17,9 +17,15 @@ namespace vk::renderer::detail
     const Shader* ShaderFor(shader::Type type, uint64_t hash, const uint32_t* code, size_t words)
     {
         if (!code || !words) return nullptr;
+        auto& last = g.lastShader[type == shader::Type::Pixel];
+        if (last.shader && last.hash == hash) return last.shader;
         auto found = g.shaders.find(hash);
         if (found != g.shaders.end())
-            return found->second.module ? &found->second : nullptr;
+        {
+            if (!found->second.module) return nullptr;
+            last = { hash, &found->second };
+            return &found->second;
+        }
 
         Shader entry;
         if (!TakePrepared(hash, entry))

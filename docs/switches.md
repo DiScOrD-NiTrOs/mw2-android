@@ -128,7 +128,6 @@ walking to it.
 |---|---|
 | `MW2_DUMP_FRAMES=<dir>` | finished frames as PNM, every `MW2_DUMP_FRAME_EVERY` frames (600); `MW2_DUMP_FRAMES_AFTER_SECONDS` starts later, `MW2_DUMP_WORLD_FRAMES=1` keeps only frames that drew the world |
 | `MW2_DUMP_TARGETS=1` | every colour surface beside the presented frame |
-| `MW2_FIND_FLICKER=<frames>` | reads back frames while the player stands still and reports 16x16 cells that differ from both neighbouring frames while those agree; the frames around each go to `MW2_DUMP_FRAMES` |
 | `F7` | with the window open: marks a flash in the log. `MW2_FLASH_FRAMES=<n>` keeps the last n frames and writes them at each mark into `MW2_FLASH_DIR` (`diagnosis/flashes`). `MW2_FLASH_HUNT=1` (or `MW2_FLASH_DRAWS=1`) also writes every draw of the kept frames as `draws_rNNNNNN.txt`; `MW2_FLASH_HUNT=1` makes the pad's Y a mark and logs every texture drawn empty. `MW2_MARK_EMPTY=1` paints those magenta. `MW2_FLASH_MARK_AT=<seconds>` makes a mark nobody pressed. `tools/flash_hunt.sh` sets this up |
 | `MW2_RENDERDOC=<seconds>[:<frames>]` | captures that many world frames (4) once the run is that old; `MW2_RENDERDOC_OUT` names the file prefix. RenderDoc must be injected before the Vulkan instance exists: run under `tools/capture_by_hand.sh` or `renderdoccmd capture` |
 | `F10`, `F11` | with the window open: F10 captures the next four world frames; F11 captures every frame until pressed again (at most 120). The window runs a frame behind, so the picture in capture N was rendered in frame N-1 |

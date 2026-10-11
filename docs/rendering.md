@@ -113,6 +113,13 @@ down to 32 MB. The buffer is split into one share per frame slot, each 4 KB
 short so that a full 256-vec4 uniform range stays in bounds. A draw that finds
 its share full is skipped.
 
+The buffer is written and never read back. The driver maps it write-combined,
+where a read is many times the cost of one from ordinary memory, so whatever
+has to be looked at again after it is written (the fetch constants while their
+addresses are rewritten, a rectangle's corners) is put together in ordinary
+memory and copied across once. Reading the fetch block in place cost a fifth
+of the ring consumer's time on Team Player.
+
 | Set | Contents |
 |---|---|
 | 0 | dynamic uniform blocks: vertex floats, fetch constants, booleans, loops, pixel floats |

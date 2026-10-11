@@ -344,6 +344,7 @@ void vk::renderer::Shutdown()
     for (auto& [key, target] : g.targets) DestroyTarget(target);
     g.pipelines.clear();
     g.shaders.clear();
+    for (auto& last : g.lastShader) last = {};
     g.targets.clear();
     for (uint32_t i = 0; i < kPresentImages; i++)
     {
