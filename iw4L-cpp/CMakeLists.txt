@@ -18,6 +18,7 @@ add_library(iw4l_core STATIC
     src/movement_iw4/movement_iw4.cpp
     src/movement_iw4/movement_impl.cpp
     src/fastfile_iw4/fastfile_iw4.cpp
+    src/fastfile_iw4/fastfile_wire.cpp
 )
 target_include_directories(iw4l_core PUBLIC src)
 

@@ -124,6 +124,56 @@ static void test_friction() {
     CHECK(slow.velocity[0] == 0.0f);
 }
 
+static void test_wire_pointer() {
+    // Null
+    auto p = wire_pointer_decode(0, Iw4WireFormat::X86);
+    CHECK(p && p->kind == WirePointer::Kind::Null);
+    // Following = u32 max on X86
+    p = wire_pointer_decode(0xFFFFFFFFull, Iw4WireFormat::X86);
+    CHECK(p && p->kind == WirePointer::Kind::Following);
+    // Insert = following - 1
+    p = wire_pointer_decode(0xFFFFFFFEull, Iw4WireFormat::X86);
+    CHECK(p && p->kind == WirePointer::Kind::Insert);
+    // Offset: packed = (block << 28 | offset) + 1
+    p = wire_pointer_decode(((1ull << 28) | 0x1234) + 1, Iw4WireFormat::X86);
+    CHECK(p && p->kind == WirePointer::Kind::Offset);
+    CHECK(p->ptr.block == 1 && p->ptr.offset == 0x1234);
+    // Block out of bounds
+    CHECK(!wire_pointer_decode(((8ull << 28) | 0) + 1, Iw4WireFormat::X86));
+    // X64 following = u64 max
+    p = wire_pointer_decode(0xFFFFFFFFFFFFFFFFull, Iw4WireFormat::X64);
+    CHECK(p && p->kind == WirePointer::Kind::Following);
+}
+
+static void test_zone_header_and_stream() {
+    uint8_t image[XFILE_HEADER_LEN + 4] = {};
+    image[0] = 0x40; image[1] = 0x0d; image[2] = 0x03; image[3] = 0x00; // size
+    image[4] = 0x00; image[5] = 0x10; image[6] = 0x00; image[7] = 0x00; // external
+    image[8 + 3*4 + 0] = 0x00; image[8 + 3*4 + 1] = 0x00; // block 3 = 0x10000
+    image[8 + 3*4 + 2] = 0x01; image[8 + 3*4 + 3] = 0x00;
+    const auto header = parse_zone_header(image, sizeof(image));
+    CHECK(header && header->size == 0x00030d40u);
+    CHECK(header->external_size == 0x00001000u);
+    CHECK(header->block_size[3] == 0x10000u);
+    CHECK(!parse_zone_header(image, 8));
+
+    // stream block conversion
+    const uint32_t blocks[16] = {0, 0, 0, 0x10000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    // offset 1 + block 3 << 28 -> pointer 0x10000 + (offset-1 & mask)
+    const uint32_t offset = (3u << 28) | 5u;
+    CHECK(convert_offset_to_pointer(offset, blocks) == 0x10004u);
+
+    // load_stream: stream index 0 is a no-op
+    uint8_t dst[8] = {9, 9, 9, 9, 9, 9, 9, 9};
+    const auto pos = load_stream(0, 1, dst, sizeof(dst), nullptr, 0, 100);
+    CHECK(pos && *pos == 100);
+    CHECK(dst[0] == 9);
+    // active_index == 2 zeroes
+    const auto pos2 = load_stream(1, 2, dst, sizeof(dst), nullptr, 0, 100);
+    CHECK(pos2 && *pos2 == 108);
+    CHECK(dst[0] == 0);
+}
+
 static void test_fastfile_header() {
     uint8_t header[FILE_PREAMBLE_LEN];
     std::memcpy(header, MAGIC_SIGNED, 8);
@@ -223,6 +273,8 @@ int main() {
     test_sparse_span_rust_warn();
     test_playerstate();
     test_friction();
+    test_wire_pointer();
+    test_zone_header_and_stream();
     test_fastfile_header();
     test_accelerate();
     test_viewangles();
