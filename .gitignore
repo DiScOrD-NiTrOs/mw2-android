@@ -94,3 +94,7 @@ rad_installer.exe
 /*.png
 /*.spv
 
+
+# ---- iw4L port ----
+/iw4L/
+/iw4L-cpp/build/
