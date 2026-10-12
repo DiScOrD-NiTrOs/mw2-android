@@ -1,13 +1,20 @@
-// Unit tests for the ported crates (math_iw4, anim_iw4).
+// Unit tests for the ported crates (math_iw4, anim_iw4, playerstate, movement, fastfile).
 #include "math_iw4/math_iw4.h"
 #include "anim_iw4/anim_iw4.h"
+#include "playerstate_iw4/playerstate_iw4.h"
+#include "movement_iw4/movement_iw4.h"
+#include "fastfile_iw4/fastfile_iw4.h"
 
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 #include <cmath>
 
 using namespace math_iw4;
 using namespace anim_iw4;
+using namespace playerstate_iw4;
+using namespace movement_iw4;
+using namespace fastfile_iw4;
 
 static int failures = 0;
 
@@ -87,6 +94,61 @@ static void test_sparse_span_rust_warn() {
     CHECK(a == 1 && b == 2 && near(t, 0.5f));
 }
 
+static void test_playerstate() {
+    const PlayerState ps = PlayerState::zero();
+    CHECK(ps.viewlocked_ent_num == ENTITYNUM_NONE);
+    CHECK(ps.hold_breath_scale == 1.0f);
+    CHECK(breath_hold_time_ms(ps) == BREATH_HOLD_TIME_MS);
+    PlayerState perk = PlayerState::zero();
+    perk.perks[0] = PERK_HOLDBREATH;
+    CHECK(breath_hold_time_ms(perk) == BREATH_HOLD_TIME_MS + PERK_EXTRA_BREATH_MS);
+    CHECK(get_viewmodel_weapon_index(perk) == 0);
+    perk.weapon = 42;
+    CHECK(get_viewmodel_weapon_index(perk) == 42);
+}
+
+static void test_friction() {
+    PlayerState ps = PlayerState::zero();
+    ps.pm_type = 0;
+    ps.velocity[0] = 300.0f;
+    Pml pml = {};
+    pml.walking = 1;
+    pml.frametime = 1.0f / 60.0f;
+    pml.ground_trace[4] = 1; // SURF_NODAMAGE; bit 0x2 (SURF_SLICK) clear so friction applies
+    friction(ps, pml);
+    CHECK(ps.velocity[0] < 300.0f && ps.velocity[0] > 0.0f);
+    // Below the kill speed the velocity zeroes out.
+    PlayerState slow = PlayerState::zero();
+    slow.velocity[0] = 0.5f;
+    friction(slow, pml);
+    CHECK(slow.velocity[0] == 0.0f);
+}
+
+static void test_fastfile_header() {
+    uint8_t header[FILE_PREAMBLE_LEN];
+    std::memcpy(header, MAGIC_SIGNED, 8);
+    header[8] = 0x14; header[9] = 0x01; header[10] = 0; header[11] = 0; // 0x114 LE
+    header[12] = 7;
+    header[13] = 0x78; header[14] = 0x56; header[15] = 0x34; header[16] = 0x12;
+    header[17] = 0xaa; header[18] = 0xbb; header[19] = 0xcc; header[20] = 0xdd;
+    const FileHeaderResult result = parse_file_header(header, sizeof(header));
+    CHECK(std::holds_alternative<FileHeader>(result));
+    const FileHeader& h = std::get<FileHeader>(result);
+    CHECK(h.signing == Signing::Signed);
+    CHECK(h.version == ZONE_VERSION_PC);
+    CHECK(h.flag == 7);
+    CHECK(h.stamp[0] == 0x12345678u);
+    CHECK(h.stamp[1] == 0xddccbbaau);
+    // Bad magic
+    uint8_t bad[FILE_PREAMBLE_LEN] = {};
+    std::memcpy(bad, "IWffX100", 8);
+    const FileHeaderResult r2 = parse_file_header(bad, sizeof(bad));
+    CHECK(std::holds_alternative<FileHeaderErrorBadMagic>(r2));
+    // Short buffer
+    const FileHeaderResult r3 = parse_file_header(header, 5);
+    CHECK(std::holds_alternative<FileHeaderErrorTooShort>(r3));
+}
+
 int main() {
     test_format_floor();
     test_angle_wrap();
@@ -95,6 +157,9 @@ int main() {
     test_quats();
     test_span_dense();
     test_sparse_span_rust_warn();
+    test_playerstate();
+    test_friction();
+    test_fastfile_header();
     if (failures == 0) {
         std::printf("all port tests passed\\n");
         return 0;

@@ -14,6 +14,9 @@ string(REPLACE "-Xclang -gcodeview" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBU
 add_library(iw4l_core STATIC
     src/math_iw4/math_iw4.cpp
     src/anim_iw4/anim_iw4.cpp
+    src/playerstate_iw4/playerstate_iw4.cpp
+    src/movement_iw4/movement_iw4.cpp
+    src/fastfile_iw4/fastfile_iw4.cpp
 )
 target_include_directories(iw4l_core PUBLIC src)
 
