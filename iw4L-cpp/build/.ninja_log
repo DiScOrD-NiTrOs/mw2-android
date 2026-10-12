@@ -1,0 +1,10 @@
+# ninja log v7
+16	1321	8134838595350002	CMakeFiles/port_tests.dir/tests/port_tests.cpp.obj	e451470a5686abf5
+24	557	8134838739798439	CMakeFiles/iw4l_core.dir/src/anim_iw4/anim_iw4.cpp.obj	35cc40d033fecffb
+6	332	8134839003618407	CMakeFiles/iw4l_core.dir/src/math_iw4/math_iw4.cpp.obj	4833b28436f4e4eb
+333	523	8134839006903093	libiw4l_core.a	383df7b6ae368385
+523	739	8134839008792169	port_tests.exe	67e3c0fedaa365d5
+7	377	8134839652073114	CMakeFiles/port_tests.dir/tests/port_tests.cpp.obj	e451470a5686abf5
+378	518	8134839655779820	port_tests.exe	67e3c0fedaa365d5
+7	390	8134840066363984	CMakeFiles/port_tests.dir/tests/port_tests.cpp.obj	e451470a5686abf5
+391	548	8134840070197544	port_tests.exe	67e3c0fedaa365d5
