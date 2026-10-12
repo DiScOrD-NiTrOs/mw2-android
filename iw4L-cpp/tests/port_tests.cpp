@@ -149,6 +149,70 @@ static void test_fastfile_header() {
     CHECK(std::holds_alternative<FileHeaderErrorTooShort>(r3));
 }
 
+static void test_accelerate() {
+    PlayerState ps = PlayerState::zero();
+    Pml pml = {};
+    pml.frametime = 1.0f / 20.0f;
+    const float wishdir[3] = {1.0f, 0.0f, 0.0f};
+    accelerate(ps, pml, wishdir, 200.0f, 10.0f);
+    // ground accelerate: adds up to wishspeed along wishdir
+    CHECK(ps.velocity[0] > 0.0f && ps.velocity[0] <= 200.0f);
+    CHECK(ps.velocity[1] == 0.0f && ps.velocity[2] == 0.0f);
+}
+
+static void test_viewangles() {
+    PlayerState ps = PlayerState::zero();
+    UserCmd cmd = {};
+    cmd.angles[0] = 8192;  // 45 degrees
+    cmd.angles[1] = -8192; // -45 degrees
+    ViewAngleClamp clamp;
+    clamp.pitch_up = 89.0f;
+    clamp.pitch_down = 89.0f;
+    update_view_angles(ps, cmd, clamp);
+    CHECK(near(ps.viewangles[0], 45.0f));
+    CHECK(near(ps.viewangles[1], -45.0f));
+    // pitch clamp: ask for 200 degrees down, expect clamped to -pitch_up
+    PlayerState ps2 = PlayerState::zero();
+    UserCmd cmd2 = {};
+    cmd2.angles[0] = 36409; // 200 degrees
+    update_view_angles(ps2, cmd2, clamp);
+    CHECK(near(ps2.viewangles[0], -89.0f));
+    CHECK(near(ps2.delta_angles[0], -289.0006f, 1e-3f));
+}
+
+static void test_stance_speed() {
+    PlayerState ps = PlayerState::zero();
+    CHECK(near(stance_speed_scale(ps, 0, 0.5f), 1.0f)); // stand
+    ps.view_height_target = view_height::CROUCH;
+    CHECK(near(stance_speed_scale(ps, 0, 0.5f), 0.65f));
+    ps.view_height_target = view_height::PRONE;
+    CHECK(near(stance_speed_scale(ps, 0, 0.5f), 0.15f));
+    ps.view_height_target = view_height::LAST_STAND;
+    CHECK(near(stance_speed_scale(ps, 0, 0.5f), 0.5f));
+    // crouch->prone lerp halfway: blend of 0.65 and 0.15
+    PlayerState lerp = PlayerState::zero();
+    lerp.view_height_lerp_time = 1000;
+    lerp.view_height_lerp_target = view_height::PRONE;
+    CHECK(near(stance_speed_scale(lerp, 1200, 0.5f), 0.4f));
+    CHECK(view_height_lerp_duration(view_height::PRONE, 0) == 400);
+    CHECK(view_height_lerp_duration(view_height::CROUCH, 0) == 400);
+    CHECK(view_height_lerp_duration(view_height::CROUCH, 1) == 200);
+}
+
+static void test_integrate_and_air() {
+    PlayerState ps = PlayerState::zero();
+    ps.velocity[1] = 64.0f;
+    Pml pml = {};
+    pml.frametime = 0.5f;
+    predict_integrate(ps, pml);
+    CHECK(near(ps.origin[1], 32.0f));
+    ps.ground_entity_num = ENTITYNUM_NONE;
+    pml.almost_ground_plane = 0;
+    CHECK(is_in_air(ps, pml));
+    pml.almost_ground_plane = 1;
+    CHECK(!is_in_air(ps, pml));
+}
+
 int main() {
     test_format_floor();
     test_angle_wrap();
@@ -160,6 +224,10 @@ int main() {
     test_playerstate();
     test_friction();
     test_fastfile_header();
+    test_accelerate();
+    test_viewangles();
+    test_stance_speed();
+    test_integrate_and_air();
     if (failures == 0) {
         std::printf("all port tests passed\\n");
         return 0;

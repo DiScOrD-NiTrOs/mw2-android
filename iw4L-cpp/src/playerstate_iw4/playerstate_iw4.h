@@ -217,4 +217,46 @@ constexpr uint32_t PERK1_SPYGAME = 1u;
 
 int32_t breath_hold_time_ms(const PlayerState& ps);
 
+// usercmd.rs ----------------------------------------------------------------
+
+struct UserCmd {
+    int32_t server_time = 0;
+    uint32_t buttons = 0;
+    int32_t angles[3] = {0, 0, 0};
+    float gun_angle_offset[2] = {0, 0};
+    uint16_t weapon = 0;
+    uint16_t weapon_mapped = 0;
+    uint16_t off_hand_index = 0;
+    int8_t forwardmove = 0;
+    int8_t rightmove = 0;
+    float melee_charge_yaw = 0.0f;
+    uint8_t melee_charge_dist = 0;
+    uint8_t selected_location[3] = {};
+    uint8_t remote_control[2] = {};
+};
+
+namespace buttons {
+constexpr uint32_t ATTACK = 0x1;
+constexpr uint32_t SPRINT = 1u << 1;
+constexpr uint32_t MELEE_CHARGE = 0x4;
+constexpr uint32_t USE = 0x8;
+constexpr uint32_t RELOAD = 0x10;
+constexpr uint32_t USE_RELOAD = 0x20;
+constexpr uint32_t PRONE = 0x100;
+constexpr uint32_t CROUCH = 0x200;
+constexpr uint32_t JUMP = 0x400;
+constexpr uint32_t ADS = 0x800;
+constexpr uint32_t STANCE_HELD = 0x1000;
+constexpr uint32_t BREATH = 0x2000;
+constexpr uint32_t FRAG = 0x4000;
+constexpr uint32_t SMOKE = 0x8000;
+constexpr uint32_t LOCATION_SELECT = 0x10000;
+constexpr uint32_t LOCATION_CANCEL = 0x20000;
+constexpr uint32_t THROW = 0x80000;
+constexpr uint32_t REMOTE_CONTROL = 0x100000;
+constexpr uint32_t OFFHAND_HOLD_CANCEL = 0x200000;
+constexpr uint32_t CHANGE_ZOOM = 1u << 26;
+constexpr uint32_t SPRINT_INTERFERING = 0xcc35;
+} // namespace buttons
+
 } // namespace playerstate_iw4
