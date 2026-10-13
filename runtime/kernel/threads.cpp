@@ -164,7 +164,7 @@ PPC_FUNC(__imp__ExCreateThread)
         *GuestPtr<uint8_t>(t->pcr + 268) = t->processor;   // KPCR.CurrentProcessorNumber
     }
 
-    uint32_t handle = InsertHandle(t);
+    uint32_t handle = InsertHandle(t, crash::CurrentThreadName(), uint32_t(ctx.lr));
     if (handleOut) *handleOut = handle;
     if (threadIdOut) *threadIdOut = t->threadId;
     // The KTHREAD is the thread's dispatcher header: ObReferenceObjectByHandle

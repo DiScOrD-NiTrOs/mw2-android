@@ -31,6 +31,13 @@ namespace kernel
         virtual const char* TypeName() const { return "object"; }
         uint32_t handle = 0;
         uint32_t guestHeader = 0;   // the dispatcher header, once it has one
+
+        const char* creatorThread = nullptr;
+        uint32_t creatorLr = 0;
+        const char* lastSignalerThread = nullptr;
+        uint32_t lastSignalerLr = 0;
+        uint32_t setCounter = 0;
+        uint32_t resetCounter = 0;
     };
 
     struct WaitBlock;
@@ -54,10 +61,10 @@ namespace kernel
         bool manualReset = true;   // a notification event; false is synchronization
         const char* TypeName() const override { return "event"; }
         bool Signalled(uintptr_t) const override { return signalled; }
-        void Satisfy(uintptr_t) override { if (!manualReset) signalled = false; }
+        void Satisfy(uintptr_t) override;
         // Return the previous state. Take the dispatcher lock themselves.
-        bool Set();
-        bool Reset();
+        bool Set(const char* thread = nullptr, uint32_t lr = 0);
+        bool Reset(const char* thread = nullptr, uint32_t lr = 0);
     };
 
     struct Semaphore : Dispatcher
@@ -105,7 +112,7 @@ namespace kernel
     uint32_t Wait(Dispatcher* const* objects, uint32_t count, bool all,
                   const int64_t* timeout100ns);
 
-    uint32_t InsertHandle(std::shared_ptr<Object> object);
+    uint32_t InsertHandle(std::shared_ptr<Object> object, const char* creatorThread = nullptr, uint32_t creatorLr = 0);
     std::shared_ptr<Object> LookupHandle(uint32_t handle);
     bool CloseHandle(uint32_t handle);
     template <typename T>

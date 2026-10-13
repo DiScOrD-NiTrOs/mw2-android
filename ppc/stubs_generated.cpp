@@ -3,12 +3,29 @@
 // which ones the game actually reaches.
 #include <ppc_recomp_shared.h>
 #include "kernel/kernel.h"
+#include "../runtime/guest.h"
+#include "../runtime/log.h"
+#include "../runtime/crash.h"
 
 PPC_FUNC(__imp__KeBugCheck) { kernel::Unimplemented("KeBugCheck"); ctx.r3.u64 = 0; }
 PPC_FUNC(__imp__KeBugCheckEx) { kernel::Unimplemented("KeBugCheckEx"); ctx.r3.u64 = 0; }
 PPC_FUNC(__imp__NtQueryDirectoryFile) { kernel::Unimplemented("NtQueryDirectoryFile"); ctx.r3.u64 = 0; }
 PPC_FUNC(__imp__RtlImageXexHeaderField) { kernel::Unimplemented("RtlImageXexHeaderField"); ctx.r3.u64 = 0; }
-PPC_FUNC(__imp__RtlRaiseException) { kernel::Unimplemented("RtlRaiseException"); ctx.r3.u64 = 0; }
+PPC_FUNC(__imp__RtlRaiseException)
+{
+    const uint32_t rec = ctx.r3.u32;
+    uint32_t code = 0, flags = 0, address = 0;
+    if (rec && guest::Base())
+    {
+        code = *GuestPtr<be32>(rec);
+        flags = *GuestPtr<be32>(rec + 4);
+        address = *GuestPtr<be32>(rec + 12);
+    }
+    LOGE("RtlRaiseException: exception code %08X, flags %08X, at %08X (caller LR: %08X, thread: %s)",
+         code, flags, address, uint32_t(ctx.lr), crash::CurrentThreadName() ? crash::CurrentThreadName() : "unknown");
+    kernel::Unimplemented("RtlRaiseException");
+    ctx.r3.u64 = 0;
+}
 PPC_FUNC(__imp__RtlTimeFieldsToTime) { kernel::Unimplemented("RtlTimeFieldsToTime"); ctx.r3.u64 = 0; }
 PPC_FUNC(__imp__RtlTimeToTimeFields) { kernel::Unimplemented("RtlTimeToTimeFields"); ctx.r3.u64 = 0; }
 PPC_FUNC(__imp__RtlUnwind) { kernel::Unimplemented("RtlUnwind"); ctx.r3.u64 = 0; }

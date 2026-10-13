@@ -190,20 +190,37 @@ void kernel::Dispatcher::Wake()
     for (WaitBlock* waiter : waiters) waiter->wake.notify_one();
 }
 
-bool kernel::Event::Set()
+void kernel::Event::Satisfy(uintptr_t)
+{
+    if (!manualReset)
+    {
+        signalled = false;
+        if (guestHeader) *GuestPtr<be32>(guestHeader + 4) = 0;
+    }
+}
+
+bool kernel::Event::Set(const char* thread, uint32_t lr)
 {
     std::lock_guard held(g_dispatcher);
     const bool was = signalled;
     signalled = true;
+    setCounter++;
+    lastSignalerThread = thread ? thread : crash::CurrentThreadName();
+    lastSignalerLr = lr;
+    if (guestHeader) *GuestPtr<be32>(guestHeader + 4) = 1;
     Wake();
     return was;
 }
 
-bool kernel::Event::Reset()
+bool kernel::Event::Reset(const char* thread, uint32_t lr)
 {
     std::lock_guard held(g_dispatcher);
     const bool was = signalled;
     signalled = false;
+    resetCounter++;
+    lastSignalerThread = thread ? thread : crash::CurrentThreadName();
+    lastSignalerLr = lr;
+    if (guestHeader) *GuestPtr<be32>(guestHeader + 4) = 0;
     return was;
 }
 
@@ -276,11 +293,14 @@ uint32_t kernel::Wait(Dispatcher* const* objects, uint32_t count, bool all,
             {
                 const char* tName = crash::CurrentThreadName();
                 if (objects[0]->handle)
-                    LOGW("sync: thread '%s' waiting on %u object(s) (first: %s, handle %08X) for >2s",
-                         tName ? tName : "unnamed", count, objects[0]->TypeName(), objects[0]->handle);
+                    LOGW("sync: thread '%s' waiting on %u object(s) (first: %s, handle %08X, created by '%s' @ %08X, sig=%d) for >2s",
+                         tName ? tName : "unnamed", count, objects[0]->TypeName(), objects[0]->handle,
+                         objects[0]->creatorThread ? objects[0]->creatorThread : "?", objects[0]->creatorLr,
+                         objects[0]->Signalled(me));
                 else
-                    LOGW("sync: thread '%s' waiting on %u object(s) (first: %s at guest %08X) for >2s",
-                         tName ? tName : "unnamed", count, objects[0]->TypeName(), objects[0]->guestHeader);
+                    LOGW("sync: thread '%s' waiting on %u object(s) (first: %s at guest %08X, sig=%d) for >2s",
+                         tName ? tName : "unnamed", count, objects[0]->TypeName(), objects[0]->guestHeader,
+                         objects[0]->Signalled(me));
                 static uint32_t s_waitCount = 0;
                 if (++s_waitCount % 3 == 0) kernel::ReportWaits();
             }
@@ -295,12 +315,16 @@ uint32_t kernel::Wait(Dispatcher* const* objects, uint32_t count, bool all,
     return result;
 }
 
-uint32_t kernel::InsertHandle(std::shared_ptr<Object> object)
+uint32_t kernel::InsertHandle(std::shared_ptr<Object> object, const char* creatorThread, uint32_t creatorLr)
 {
     std::lock_guard held(g_handleLock);
     const uint32_t handle = g_nextHandle;
     g_nextHandle += 4;
     if (!object->handle) object->handle = handle;
+    if (!object->creatorThread)
+        object->creatorThread = creatorThread ? creatorThread : crash::CurrentThreadName();
+    if (!object->creatorLr)
+        object->creatorLr = creatorLr;
     g_handles.emplace(handle, std::move(object));
     return handle;
 }

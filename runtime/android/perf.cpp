@@ -196,8 +196,10 @@ void android::perf::ApplyMemoryDefaults()
         setenv("MW2_PIPELINE_CACHE", pipeline.c_str(), 0);
     }
 
-    LOGI("perf: %u MB of memory, %u MB free; textures %u MB, arena %u MB", totalMB,
-         AvailableMemoryMB(), textureMB, arenaMB);
+    const char* activeBudget = std::getenv("MW2_TEXTURE_BUDGET_MB");
+    const uint32_t loggedTextureMB = activeBudget ? uint32_t(std::strtoul(activeBudget, nullptr, 10)) : textureMB;
+    LOGI("perf: %u MB of memory, %u MB free; textures %u MB (budget), arena %u MB", totalMB,
+         AvailableMemoryMB(), loggedTextureMB, arenaMB);
 }
 
 // ComponentCallbacks2: 5 RUNNING_MODERATE, 10 RUNNING_LOW, 15 RUNNING_CRITICAL,

@@ -108,10 +108,10 @@ PPC_FUNC(__imp__NtCreateEvent)
     auto event = std::make_shared<Event>();
     event->manualReset = ctx.r5.u32 == 0;
     event->signalled = ctx.r6.u32 != 0;
-    const uint32_t handle = InsertHandle(event);
+    const uint32_t handle = InsertHandle(event, crash::CurrentThreadName(), uint32_t(ctx.lr));
     if (auto* out = GuestPtr<be32>(ctx.r3.u32)) *out = handle;
-    LOGI("sync: NtCreateEvent handle %08X, manual=%d, init=%d (called from %08X)",
-         handle, event->manualReset, event->signalled, uint32_t(ctx.lr));
+    LOGI("sync: NtCreateEvent handle %08X, manual=%d, init=%d (called from %08X by '%s')",
+         handle, event->manualReset, event->signalled, uint32_t(ctx.lr), crash::CurrentThreadName());
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
@@ -119,7 +119,7 @@ PPC_FUNC(__imp__NtSetEvent)
 {
     auto event = LookupHandleAs<Event>(ctx.r3.u32);
     if (!event) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
-    const bool was = event->Set();
+    const bool was = event->Set(crash::CurrentThreadName(), uint32_t(ctx.lr));
     if (auto* previous = GuestPtr<be32>(ctx.r4.u32)) *previous = was ? 1u : 0u;
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
@@ -128,7 +128,7 @@ PPC_FUNC(__imp__NtClearEvent)
 {
     auto event = LookupHandleAs<Event>(ctx.r3.u32);
     if (!event) { ctx.r3.u64 = X_STATUS_INVALID_HANDLE; return; }
-    event->Reset();
+    event->Reset(crash::CurrentThreadName(), uint32_t(ctx.lr));
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }
 
@@ -227,6 +227,23 @@ void kernel::ReportWaits()
              w->callers[1].load(std::memory_order_relaxed),
              w->callers[2].load(std::memory_order_relaxed),
              w->callers[3].load(std::memory_order_relaxed));
+
+        auto obj = LookupHandle(handle);
+        if (obj)
+        {
+            if (auto* ev = dynamic_cast<Event*>(obj.get()))
+            {
+                LOGW("sync:   -> handle %08X is Event [manual=%d, sig=%d, sets=%u, resets=%u, created by '%s' @ %08X, last set by '%s' @ %08X]",
+                     handle, ev->manualReset, ev->signalled, ev->setCounter, ev->resetCounter,
+                     ev->creatorThread ? ev->creatorThread : "?", ev->creatorLr,
+                     ev->lastSignalerThread ? ev->lastSignalerThread : "none", ev->lastSignalerLr);
+            }
+            else
+            {
+                LOGW("sync:   -> handle %08X is %s [created by '%s' @ %08X]",
+                     handle, obj->TypeName(), obj->creatorThread ? obj->creatorThread : "?", obj->creatorLr);
+            }
+        }
     }
     if (any) LOGW("sync: --------------------------------");
 }
@@ -256,13 +273,13 @@ PPC_FUNC(__imp__KeSetEvent)
 {
     // (Event, Increment, Wait): returns the previous state.
     auto event = ObjectAtAs<Event>(ctx.r3.u32);
-    ctx.r3.u64 = event && event->Set() ? 1 : 0;
+    ctx.r3.u64 = event && event->Set(crash::CurrentThreadName(), uint32_t(ctx.lr)) ? 1 : 0;
 }
 
 PPC_FUNC(__imp__KeResetEvent)
 {
     auto event = ObjectAtAs<Event>(ctx.r3.u32);
-    ctx.r3.u64 = event && event->Reset() ? 1 : 0;
+    ctx.r3.u64 = event && event->Reset(crash::CurrentThreadName(), uint32_t(ctx.lr)) ? 1 : 0;
 }
 
 PPC_FUNC(__imp__KeWaitForSingleObject)
