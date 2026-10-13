@@ -291,7 +291,7 @@ void platform::SetThreadAffinity(ThreadAffinityRole role)
         if (targetMask & (1u << i))
             CPU_SET(i, &cpuset);
     }
-    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
 }
 
 #if defined(__ANDROID__)

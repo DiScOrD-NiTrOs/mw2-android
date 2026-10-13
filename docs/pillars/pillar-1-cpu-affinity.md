@@ -39,7 +39,7 @@ The CPU cores are sorted in descending order of maximum frequency to identify:
 - **`performanceCoreMask`**: Mask containing the next 2-4 highest frequency cores.
 - **`efficiencyCoreMask`**: Remaining cores.
 
-### 2. Thread Affinity Binding (`pthread_setaffinity_np`)
+### 2. Thread Affinity Binding (`sched_setaffinity`)
 Each native worker thread calls a dedicated affinity binding helper upon spawning:
 ```cpp
 void PinCurrentThreadToCores(uint32_t coreMask)
@@ -51,7 +51,7 @@ void PinCurrentThreadToCores(uint32_t coreMask)
             CPU_SET(i, &cpuset);
         }
     }
-    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
 }
 ```
 
