@@ -4,6 +4,8 @@
 #include "playerstate_iw4/playerstate_iw4.h"
 #include "movement_iw4/movement_iw4.h"
 #include "fastfile_iw4/fastfile_iw4.h"
+#include "clipmap_iw4/clipmap_iw4.h"
+#include "entity_iw4/entity_iw4.h"
 
 #include <cassert>
 #include <cstdio>
@@ -263,6 +265,28 @@ static void test_integrate_and_air() {
     CHECK(!is_in_air(ps, pml));
 }
 
+static void test_clipmap_and_entity() {
+    auto rx = clipmap_iw4::RigidXform::identity();
+    CHECK(rx.axis[0][0] == 1.0f && rx.axis[1][1] == 1.0f && rx.axis[2][2] == 1.0f);
+    CHECK(rx.axis[0][1] == 0.0f && rx.axis[1][2] == 0.0f);
+    CHECK(rx.trans[0] == 0.0f && rx.trans[1] == 0.0f && rx.trans[2] == 0.0f);
+
+    CHECK(entity_iw4::glass_state_from_damage(0) == entity_iw4::GlassPieceState::Intact);
+    CHECK(entity_iw4::glass_state_from_damage(entity_iw4::GLASS_DAMAGE_TO_WEAKEN) == entity_iw4::GlassPieceState::Weakened);
+    CHECK(entity_iw4::glass_state_from_damage(entity_iw4::GLASS_DAMAGE_TO_DESTROY) == entity_iw4::GlassPieceState::Shattered);
+    CHECK(entity_iw4::glass_is_solid(0));
+    CHECK(!entity_iw4::glass_is_solid(entity_iw4::GLASS_DAMAGE_TO_DESTROY));
+
+    const float s[3] = {-10.0f, 0.0f, 0.0f};
+    const float e[3] = {10.0f, 0.0f, 0.0f};
+    auto hit = clipmap_iw4::capsule_query::sweep_point(s, e, 1.0f, 0.0f);
+    CHECK(hit.has_value());
+    if (hit.has_value()) {
+        CHECK(hit->fraction > 0.0f && hit->fraction < 1.0f);
+        CHECK(near(hit->fraction, 0.45f, 0.05f));
+    }
+}
+
 int main() {
     test_format_floor();
     test_angle_wrap();
@@ -280,6 +304,7 @@ int main() {
     test_viewangles();
     test_stance_speed();
     test_integrate_and_air();
+    test_clipmap_and_entity();
     if (failures == 0) {
         std::printf("all port tests passed\\n");
         return 0;

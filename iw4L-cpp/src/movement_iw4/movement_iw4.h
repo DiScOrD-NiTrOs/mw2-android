@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <cmath>
+#include <optional>
 
 #include "playerstate_iw4/playerstate_iw4.h"
 
@@ -29,7 +30,6 @@ struct Pml {
     float previous_origin[3] = {0, 0, 0};
     float previous_velocity[3] = {0, 0, 0};
     int32_t holdrand = 0;
-    // Four jump-animation producer slots; empty until filled this step.
     struct JumpSlot {
         bool has = false;
         int32_t animation = 0;
@@ -134,5 +134,102 @@ StanceSurface stance_surface_type(const PlayerState& ps);
 float stance_speed_scale(const PlayerState& ps, int32_t server_time, float last_stand_scale);
 
 int32_t view_height_lerp_duration(int32_t lerp_target, int32_t lerp_down);
+
+// jump.rs -------------------------------------------------------------------
+
+enum class JumpAnimation : int32_t { Forward = 0, Backward = 1 };
+
+struct JumpCheckContext {
+    int32_t time_since_jump = 0;
+    uint32_t old_buttons = 0;
+    uint8_t stance_surface_type = 0;
+};
+
+struct JumpLaunchContext {
+    float jump_height = 0.0f;
+    bool dive = false;
+    float crouch_jump_scale = 0.0f;
+    float jump_ladder_push_vel = 0.0f;
+};
+
+struct JumpCheckResult {
+    enum class Kind : uint8_t { NotEligible, HeldJumpCleared, Ready, Launched } kind =
+        Kind::NotEligible;
+    int32_t animation = 0; // JumpAnimation when kind == Launched
+};
+
+void jump_clear_state(PlayerState& ps);
+
+std::optional<float> get_step_height(const PlayerState& ps, const float origin[3]);
+
+int32_t jump_ground_surface_type(uint32_t surface_flags);
+
+void jump_event(PlayerState& ps, uint32_t surface_flags);
+
+void jump_start(PlayerState& ps, Pml& pml, const UserCmd& cmd, const JumpLaunchContext& context);
+
+void push_off_ladder(PlayerState& ps, const Pml& pml, float push_vel);
+
+JumpCheckResult jump_check_gate(PlayerState& ps, UserCmd& cmd, const JumpCheckContext& context);
+
+bool stance_allows_jump(const PlayerState& ps);
+
+JumpCheckResult jump_check_launch(PlayerState& ps, Pml& pml, UserCmd& cmd,
+                                  const JumpCheckContext& gate, const JumpLaunchContext& launch);
+
+// footstep.rs / dmgtimer.rs cross-references
+size_t surface_type_index(uint32_t surface_flags);
+
+const char* surface_type_to_name(size_t index);
+
+const char* surface_type_name(uint32_t surface_flags);
+
+bool bob_cycle_wrapped(uint8_t old, uint8_t new_);
+
+float get_bob_max_speed(const PlayerState& ps, int8_t forwardmove, int8_t rightmove,
+                        bool walking, bool sprinting, int32_t server_time,
+                        const CmdScaleWalkContext& scales);
+
+void footsteps_bob_cycle(PlayerState& ps, int32_t msec, int8_t forwardmove, int8_t rightmove,
+                         bool almost_ground_plane, int32_t server_time,
+                         const CmdScaleWalkContext& scales);
+
+std::optional<uint8_t> footsteps_anim_move_type(const PlayerState& ps, int8_t forwardmove,
+                                                int8_t rightmove, bool almost_ground_plane);
+
+bool should_make_footsteps(const PlayerState& ps);
+
+int32_t footstep_event_type(const PlayerState& ps, uint32_t surface_flags);
+
+bool footstep_event(PlayerState& ps, uint8_t old, uint8_t new_, uint32_t surface_flags,
+                    bool b_footstep);
+
+bool ladder_footsteps(PlayerState& ps, int32_t msec, int32_t server_time);
+
+float damage_scale_walk(int32_t damage_timer);
+
+void walk_move_drop_damage_timer(PlayerState& ps, float frametime_seconds);
+
+bool damage_window_open(int32_t damage_timer, int32_t damage_duration, int32_t window_ms);
+
+// dmgtimer constants (shared across movement translation units)
+inline constexpr float PLAYER_DMGTIMER_TIME_PER_POINT = 100.0f;
+inline constexpr float PLAYER_DMGTIMER_MAX_TIME = 750.0f;
+inline constexpr float PLAYER_DMGTIMER_MIN_SCALE = 0.0f;
+inline constexpr int32_t PLAYER_DMGTIMER_STUMBLE_TIME_MS = 500;
+inline constexpr int32_t PLAYER_DMGTIMER_FLINCH_TIME_MS = 500;
+inline constexpr uint8_t ANIM_MT_FLINCH_FORWARD = 32;
+
+// ---- Extended types used by the walk/air/ground/slide/ladder ports ---------
+// These are intentionally kept in the .cpp file to avoid introducing a hard
+// dependency on trace_iw4 inside this header. The public API that other movement
+// code needs from these ports is re-exported there via movement_extended.h.
+
+// ladder.rs constants (used by the ladder port when it lands)
+constexpr int32_t LADDER_JUMP_BLOCK_MS = 300;
+constexpr float LADDER_TRACE_DIST_AIR = 30.0f;
+constexpr float LADDER_TRACE_DIST_WALK = 8.0f;
+constexpr float LADDER_ATTRACT_SPEED = 50.0f;
+constexpr uint32_t SURF_LADDER = 0x8u;
 
 } // namespace movement_iw4
