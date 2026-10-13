@@ -725,7 +725,7 @@ namespace
         out.volume = volume;
         out.bytes = 4 * layers;
         if (!MakeImage(out, nullptr)) return false;
-        const std::vector<uint8_t> texels(4 * layers, 0);
+        const std::vector<uint8_t> texels(4 * layers, 255);
         if (!StageInto(out, texels.data(), texels.size(), nullptr)) return false;
         out.sampler = SamplerFor(0);
         return out.sampler != VK_NULL_HANDLE;
@@ -964,7 +964,14 @@ bool vk::textures::Initialise()
         if (g.memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
             deviceLocal = std::max(deviceLocal, g.memory.memoryHeaps[i].size);
     g.budget = env::Number("MW2_TEXTURE_BUDGET_MB") << 20;
-    if (!g.budget) g.budget = std::clamp<uint64_t>(deviceLocal / 2, 256ull << 20, 2048ull << 20);
+    if (!g.budget)
+    {
+#if defined(MW2_ANDROID) || defined(__ANDROID__)
+        g.budget = 128ull << 20;
+#else
+        g.budget = std::clamp<uint64_t>(deviceLocal / 2, 256ull << 20, 2048ull << 20);
+#endif
+    }
 
     VkCommandPoolCreateInfo pool{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
     pool.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
@@ -1282,13 +1289,13 @@ void vk::textures::MemoryWritten(uint32_t physicalAddress, uint32_t size)
 
 namespace
 {
-    // How long an image or a set goes unbound before it may be let go: ten
-    // seconds of frames, far past any submission still running or any command
-    // the recorder thread has yet to make.
+#if defined(MW2_ANDROID) || defined(__ANDROID__)
+    constexpr uint64_t kUnusedFrames = 120;
+    constexpr uint64_t kSweepFrames = 32;
+#else
     constexpr uint64_t kUnusedFrames = 600;
-    // The cache is looked over once in this many frames: the sets in one go at
-    // the start of the round, the images a slice a frame.
     constexpr uint64_t kSweepFrames = 64;
+#endif
 
     void FreeSet(const State::Set& entry)
     {
@@ -1399,25 +1406,46 @@ namespace
     // quarters of it.
     void Evict()
     {
-        std::vector<std::pair<uint64_t, uint64_t>> oldest;   // last bound, id
-        for (size_t i = 0; i < g.images.size(); i++)
-            if (Idle(g.images[i])) oldest.push_back({ g.images[i].lastBound, uint64_t(i + 1) });
-        if (oldest.empty()) return;
-        std::sort(oldest.begin(), oldest.end());
         const uint64_t target = g.budget / 4 * 3;
         uint64_t count = 0, bytes = 0;
-        for (const auto& [lastBound, id] : oldest)
+
+        auto evictOldest = [&](uint64_t graceFrames) {
+            std::vector<std::pair<uint64_t, uint64_t>> candidates;
+            for (size_t i = 0; i < g.images.size(); i++)
+            {
+                const Image& img = g.images[i];
+                if (img.image && !img.borrowed && !img.pinned &&
+                    g.frame - img.lastBound >= graceFrames)
+                {
+                    candidates.push_back({ img.lastBound, uint64_t(i + 1) });
+                }
+            }
+            if (candidates.empty()) return;
+            std::sort(candidates.begin(), candidates.end());
+            for (const auto& [lastBound, id] : candidates)
+            {
+                if (g.liveBytes <= target) break;
+                bytes += g.images[size_t(id - 1)].bytes;
+                count++;
+                Release(id);
+            }
+        };
+
+        // First pass: normal idle age
+        evictOldest(kUnusedFrames + kSweepFrames);
+
+        // Emergency pass: if still over budget (e.g. streaming rush),
+        // evict images not bound in recent frames (outside GPU ring depth).
+        if (g.liveBytes > target)
         {
-            if (g.liveBytes <= target) break;
-            bytes += g.images[size_t(id - 1)].bytes;
-            count++;
-            Release(id);
+            evictOldest(16);
         }
+
         g.evicted += count;
         g.evictedBytes += bytes;
         if (g.evictionPasses++ < 4)
-            LOGI("textures: over the %llu MB budget; evicted %llu (%llu MB) not bound for ten"
-                 " seconds", (unsigned long long)(g.budget >> 20), (unsigned long long)count,
+            LOGI("textures: over the %llu MB budget; evicted %llu (%llu MB)",
+                 (unsigned long long)(g.budget >> 20), (unsigned long long)count,
                  (unsigned long long)(bytes >> 20));
     }
 }

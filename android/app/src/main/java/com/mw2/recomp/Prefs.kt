@@ -46,7 +46,7 @@ class Prefs(context: Context) {
      * (runtime/gpu/vulkan/texture_cache.cpp).
      */
     var textureBudgetMB: Int
-        get() = store.getInt(KEY_TEXTURE_MB, 0)
+        get() = store.getInt(KEY_TEXTURE_MB, 128)
         set(value) = store.edit().putInt(KEY_TEXTURE_MB, value).apply()
 
     var showStats: Boolean
