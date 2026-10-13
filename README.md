@@ -1,6 +1,6 @@
 # Modern Warfare 2 — Android & PC Port
 
-[![Android CI](https://github.com/OpenPort-Labs/mw2-android/actions/workflows/android.yml/badge.svg)](https://github.com/OpenPort-Labs/mw2-android/actions/workflows/android.yml)
+[![Build Android APK](https://github.com/OpenPort-Labs/mw2-android/actions/workflows/build-apk.yml/badge.svg)](https://github.com/OpenPort-Labs/mw2-android/actions/workflows/build-apk.yml)
 [![Release](https://img.shields.io/github/v/release/OpenPort-Labs/mw2-android?color=blue)](https://github.com/OpenPort-Labs/mw2-android/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 

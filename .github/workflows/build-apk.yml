@@ -1,6 +1,8 @@
 name: Build Android APK
 
 on:
+  release:
+    types: [ published ]
   workflow_dispatch:
     inputs:
       title:
@@ -18,21 +20,9 @@ on:
         type: boolean
         default: true
       release_tag:
-        description: "GitHub Release tag to attach to"
+        description: "GitHub Release tag to attach to (optional, defaults to latest release)"
         type: string
-        default: "v0.0.1"
-  push:
-    branches: [ master ]
-    paths:
-      - 'android/**'
-      - 'runtime/**'
-      - 'launcher/**'
-      - 'ppc/**'
-      - 'cmake/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/build-apk.yml'
-  release:
-    types: [ published ]
+        default: ""
 
 permissions:
   contents: write
@@ -118,11 +108,17 @@ jobs:
           retention-days: 30
 
       - name: Upload to GitHub Release
-        if: github.event_name == 'release' || github.event.inputs.upload_release == true || github.event.inputs.upload_release == 'true' || github.event_name == 'push'
+        if: github.event_name == 'release' || github.event.inputs.upload_release == true || github.event.inputs.upload_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.release.tag_name || github.event.inputs.release_tag || 'v0.0.1' }}"
+          TAG="${{ github.event.release.tag_name || github.event.inputs.release_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --json tagName -q .tagName -R "${{ github.repository }}" 2>/dev/null || echo "")
+          fi
+          if [ -z "$TAG" ]; then
+            TAG="v0.0.1"
+          fi
           case "${{ github.event.inputs.build_type || 'release' }}" in
             debug)   dir="debug"; apk_name="app-campaign-debug.apk" ;;
             *)       dir="release"; apk_name="app-campaign-release.apk" ;;
