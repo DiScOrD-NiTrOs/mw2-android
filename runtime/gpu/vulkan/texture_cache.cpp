@@ -850,11 +850,16 @@ namespace
         if (vk::bc::IsBCFormat(xenosFormat) && (!vk::pipeline::TextureCompressionBC() || s_forceBcDecompress))
         {
             int decompFormat = 0;
-            if (vk::bc::Decompress(data, xenosFormat, decompressed, decompFormat))
+            if (!vk::bc::Decompress(data, xenosFormat, decompressed, decompFormat))
             {
-                format = decompFormat;
-                pData = &decompressed;
+                Fail("software BC decompression failed", error);
+                LOGE("Texture upload: software BC decompression failed for xenosFormat %u (%ux%u, %zu levels): %s",
+                     xenosFormat, data.width, data.height, data.levels.size(),
+                     decompressed.error ? decompressed.error : "decoder failure");
+                return vk::textures::kNone;
             }
+            format = decompFormat;
+            pData = &decompressed;
         }
 
         // The fetch constant asked for the stored value to be linearised. An
@@ -1189,13 +1194,37 @@ namespace
         if (vk::bc::IsBCFormat(image.xenosFormat) && (!vk::pipeline::TextureCompressionBC() || s_forceBcDecompress))
         {
             int decompFormat = 0;
-            if (vk::bc::Decompress(data, image.xenosFormat, decompressed, decompFormat))
+            if (!vk::bc::Decompress(data, image.xenosFormat, decompressed, decompFormat))
             {
-                pData = &decompressed;
+                LOGE("Texture restage: software BC decompression failed for xenosFormat %u (%ux%u, %zu levels): %s",
+                     image.xenosFormat, data.width, data.height, data.levels.size(),
+                     decompressed.error ? decompressed.error : "decoder failure");
+                return false;
             }
+            if (image.format != VkFormat(decompFormat) &&
+                image.format != VkFormat(vk::formats::SrgbFormatFor(decompFormat)))
+            {
+                LOGE("Texture restage: format mismatch for xenosFormat %u (got %d, image has %d)",
+                     image.xenosFormat, decompFormat, int(image.format));
+                return false;
+            }
+            pData = &decompressed;
         }
-        return pData->ok && pData->bytes.size() == image.bytes &&
-               StageInto(image, pData->bytes.data(), pData->bytes.size(), nullptr);
+
+        if (!pData->ok)
+        {
+            LOGE("Texture restage: payload data is invalid for xenosFormat %u", image.xenosFormat);
+            return false;
+        }
+
+        if (pData->bytes.size() != image.bytes)
+        {
+            LOGE("Texture restage: payload size mismatch for xenosFormat %u (got %zu bytes, image expects %llu bytes)",
+                 image.xenosFormat, pData->bytes.size(), static_cast<unsigned long long>(image.bytes));
+            return false;
+        }
+
+        return StageInto(image, pData->bytes.data(), pData->bytes.size(), nullptr);
     }
 
     gpu::TextureData ReadAgain(const Image& image)

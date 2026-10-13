@@ -8,26 +8,40 @@ MAGIC = b"MICROSOFT*XBOX*MEDIA"
 class XDvdFs:
     def __init__(self, path):
         self.f = open(path, "rb")
+        self.image_size = os.fstat(self.f.fileno()).st_size
         self.base = self._find_base()
+        if self.base + 32 * SECTOR + SECTOR > self.image_size:
+            raise RuntimeError("Volume descriptor sector beyond image bounds")
         self.f.seek(self.base + 32 * SECTOR)
         vd = self.f.read(SECTOR)
         assert vd[:20] == MAGIC and vd[0x7EC:0x800] == MAGIC, "bad volume descriptor"
         self.root_sector, self.root_size = struct.unpack_from("<II", vd, 0x14)
+        if self.base + self.root_sector * SECTOR + self.root_size > self.image_size:
+            raise RuntimeError("Root directory sector range exceeds image size")
+        self.visited_dirs = set()
 
     def _find_base(self):
         for off in (0x0, 0xFD90000, 0x2080000, 0x18300000, 0x18310000):
-            self.f.seek(off + 32 * SECTOR)
-            if self.f.read(20) == MAGIC:
-                return off
+            if off + 32 * SECTOR + 20 <= self.image_size:
+                self.f.seek(off + 32 * SECTOR)
+                if self.f.read(20) == MAGIC:
+                    return off
         raise RuntimeError("XDVDFS magic not found at known offsets")
 
     def _read(self, sector, size):
-        self.f.seek(self.base + sector * SECTOR)
+        start = self.base + sector * SECTOR
+        if start + size > self.image_size:
+            raise ValueError(f"Requested sector range [{start}, {start + size}) exceeds image size {self.image_size}")
+        self.f.seek(start)
         return self.f.read(size)
 
-    def _walk_dir(self, sector, size, prefix=""):
-        if size == 0:
+    def _walk_dir(self, sector, size, prefix="", depth=0):
+        if size == 0 or depth > 32:
             return
+        if sector in self.visited_dirs:
+            return
+        self.visited_dirs.add(sector)
+
         data = self._read(sector, size)
         stack = [0]
         seen = set()
@@ -40,7 +54,13 @@ class XDvdFs:
             left, right, start, fsize, attr, nlen = struct.unpack_from("<HHIIBB", data, p)
             if left == 0xFFFF:
                 continue
-            name = data[p + 14 : p + 14 + nlen].decode("latin-1")
+            if p + 14 + nlen > len(data):
+                continue
+            raw_name = data[p + 14 : p + 14 + nlen].decode("latin-1", errors="replace")
+            # Sanitize name to avoid directory traversal
+            name = raw_name.replace("/", "_").replace("\\", "_")
+            if name in (".", "..") or not name:
+                continue
             if left:
                 stack.append(left)
             if right:
@@ -48,22 +68,26 @@ class XDvdFs:
             full = prefix + name
             if attr & 0x10:  # directory
                 yield (full + "/", start, fsize, attr, True)
-                yield from self._walk_dir(start, fsize, full + "/")
+                yield from self._walk_dir(start, fsize, full + "/", depth + 1)
             else:
                 yield (full, start, fsize, attr, False)
 
     def walk(self):
+        self.visited_dirs.clear()
         yield from self._walk_dir(self.root_sector, self.root_size)
 
     def extract(self, sector, size, dest):
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-        self.f.seek(self.base + sector * SECTOR)
+        start = self.base + sector * SECTOR
+        if start + size > self.image_size:
+            raise ValueError(f"File extraction range [{start}, {start + size}) exceeds image size {self.image_size}")
+        self.f.seek(start)
         with open(dest, "wb") as o:
             left = size
             while left:
                 chunk = self.f.read(min(1 << 22, left))
                 if not chunk:
-                    break
+                    raise IOError(f"Truncated ISO read: expected {size} bytes, got {size - left}")
                 o.write(chunk)
                 left -= len(chunk)
 
@@ -81,13 +105,17 @@ if __name__ == "__main__":
         print(f"# {len(entries)} entries, {total/1e9:.2f} GB of files", file=sys.stderr)
     else:
         outdir = sys.argv[2]
+        outdir_canon = os.path.realpath(outdir)
         want = [w.lower() for w in sys.argv[3:]]
         for name, sec, size, attr, isdir in entries:
             if isdir or name.startswith("$SystemUpdate"):
                 continue
             if want and not any(w in name.lower() for w in want):
                 continue
-            dest = os.path.join(outdir, name)
+            dest = os.path.realpath(os.path.join(outdir, name))
+            if not dest.startswith(outdir_canon + os.sep) and dest != outdir_canon:
+                print(f"Skipping unsafe path: {name}", file=sys.stderr)
+                continue
             if os.path.exists(dest) and os.path.getsize(dest) == size:
                 print(f"already exists: {name}")
                 continue

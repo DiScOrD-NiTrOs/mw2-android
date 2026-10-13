@@ -387,10 +387,19 @@ def unpack_archive(path, into_directory, wanted_name, placed):
     try:
         if head[:4] == b"PK\x03\x04":
             say("    a zip archive; unpacking")
+            max_entries = 50000
+            max_total_bytes = 15 * (1024 ** 3)  # 15 GiB
+            total_bytes = 0
             with zipfile.ZipFile(path) as archive:
-                for member in archive.infolist():
+                infolist = archive.infolist()
+                if len(infolist) > max_entries:
+                    raise SystemExit(f"Archive has too many entries ({len(infolist)} > {max_entries})")
+                for member in infolist:
                     if member.is_dir():
                         continue
+                    total_bytes += member.file_size
+                    if total_bytes > max_total_bytes:
+                        raise SystemExit(f"Archive exceeds uncompressed size limit ({max_total_bytes} bytes)")
                     # No member may escape the folder it is unpacked into.
                     destination = os.path.realpath(os.path.join(unpacked, member.filename))
                     if not destination.startswith(os.path.realpath(unpacked) + os.sep):
@@ -540,10 +549,11 @@ def main():
                 )
 
         if not identify_and_place(path, wanted or name, arguments.into, placed, wanted):
+            head_bytes = first_bytes(path, 4)
             os.unlink(path)
             raise SystemExit(
                 f"    {name} is not an Xbox 360 executable, a disc image or an "
-                f"archive holding one. It starts with {first_bytes(path, 4)!r}."
+                f"archive holding one. It starts with {head_bytes!r}."
             )
 
     required = [name for name in re.split(r"[\s,]+", arguments.require) if name]
