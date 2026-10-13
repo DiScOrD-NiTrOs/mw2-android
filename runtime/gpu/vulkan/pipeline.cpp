@@ -153,6 +153,11 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
                                 void** deviceOut, void** queueOut, void* features)
 {
     VkPhysicalDevice physical = static_cast<VkPhysicalDevice>(physicalDevice);
+    VkPhysicalDeviceProperties physicalProperties{};
+    vkGetPhysicalDeviceProperties(physical, &physicalProperties);
+    g.deviceProperties = physicalProperties;
+    g.physical = physical;
+
     const float priority = 1.0f;
     VkDeviceQueueCreateInfo queue{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
     queue.queueFamilyIndex = family;
@@ -185,7 +190,7 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     // devices to the software BC decoder, whose results are correct on both.
     // MW2_FORCE_BC_HW=1 puts it back when a driver proves clean.
     // The env flag is also available to users who hit this on another GPU vendor.
-    if (g.deviceProperties.vendorID == 0x5143 && supported.textureCompressionBC &&
+    if (physicalProperties.vendorID == 0x5143 && supported.textureCompressionBC &&
         !env::Flag("MW2_FORCE_BC_HW"))
     {
         enabled.textureCompressionBC = VK_FALSE;
@@ -204,9 +209,7 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     enabled.samplerAnisotropy = supported.samplerAnisotropy;
     if (supported.samplerAnisotropy)
     {
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(physical, &properties);
-        g.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+        g.maxAnisotropy = physicalProperties.limits.maxSamplerAnisotropy;
     }
 
     // The image format list lets a resolve destination carry an sRGB view beside
@@ -220,15 +223,13 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     // has to be asked for it by name -- its presence is what renderer.cpp
     // gates multisampling on.
     {
-        VkPhysicalDeviceProperties check{};
-        vkGetPhysicalDeviceProperties(physical, &check);
-        if (check.apiVersion < VK_API_VERSION_1_2 &&
+        if (physicalProperties.apiVersion < VK_API_VERSION_1_2 &&
             DeviceHasExtension(physical, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME))
             extensions.push_back(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
         // The depth resolve's own query goes through GetPhysicalDevice*
         // Properties2, and the 1.1 promoted Maintenance1 is where negative
         // viewport heights (the renderer's flipped clip space) live.
-        if (check.apiVersion < VK_API_VERSION_1_1)
+        if (physicalProperties.apiVersion < VK_API_VERSION_1_1)
         {
             if (DeviceHasExtension(physical, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
                 extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
@@ -259,9 +260,7 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     // draw it is used in, and can be compiled when the title loads it rather
     // than at the first draw -- which is what the console does, where a
     // shader is ready the moment it is loaded.
-    VkPhysicalDeviceProperties deviceProperties{};
-    vkGetPhysicalDeviceProperties(physical, &deviceProperties);
-    const bool core13 = deviceProperties.apiVersion >= VK_API_VERSION_1_3;
+    const bool core13 = physicalProperties.apiVersion >= VK_API_VERSION_1_3;
 
     const bool dynamicRenderingExtension =
         DeviceHasExtension(physical, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
