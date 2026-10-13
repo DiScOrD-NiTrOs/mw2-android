@@ -312,9 +312,9 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
 
     LOGI("vulkan: device reports Vulkan %u.%u.%u; dynamic rendering %s (extension %s),"
          " extended dynamic state %s (extension %s)",
-         VK_VERSION_MAJOR(deviceProperties.apiVersion),
-         VK_VERSION_MINOR(deviceProperties.apiVersion),
-         VK_VERSION_PATCH(deviceProperties.apiVersion),
+         VK_VERSION_MAJOR(physicalProperties.apiVersion),
+         VK_VERSION_MINOR(physicalProperties.apiVersion),
+         VK_VERSION_PATCH(physicalProperties.apiVersion),
          dynamicRendering.dynamicRendering ? "yes" : "no",
          dynamicRenderingExtension ? "yes" : "no",
          dynamicState.extendedDynamicState ? "yes" : "no",
