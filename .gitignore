@@ -96,5 +96,8 @@ rad_installer.exe
 
 
 # ---- iw4L port ----
+iw4L/
 /iw4L/
+iw4L-cpp/build/
 /iw4L-cpp/build/
+build-iw4l*/

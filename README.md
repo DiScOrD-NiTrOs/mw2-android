@@ -1,7 +1,7 @@
 # Modern Warfare 2 — Android & PC Port
 
-[![Android CI](https://github.com/GuruMachanica/mw2-android/actions/workflows/android.yml/badge.svg)](https://github.com/GuruMachanica/mw2-android/actions/workflows/android.yml)
-[![Release](https://img.shields.io/github/v/release/GuruMachanica/mw2-android?color=blue)](https://github.com/GuruMachanica/mw2-android/releases/latest)
+[![Android CI](https://github.com/OpenPort-Labs/mw2-android/actions/workflows/android.yml/badge.svg)](https://github.com/OpenPort-Labs/mw2-android/actions/workflows/android.yml)
+[![Release](https://img.shields.io/github/v/release/OpenPort-Labs/mw2-android?color=blue)](https://github.com/OpenPort-Labs/mw2-android/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 *Call of Duty: Modern Warfare 2 (2009)* for the Xbox 360, recompiled ahead-of-time into native machine code for **Android (ARM64)**, **Linux**, and **Windows (x86-64)**.
@@ -30,7 +30,9 @@ This is **not an emulator**: Xbox 360 PowerPC machine instructions are translate
   - **Google Tensor** (Tri-cluster 2+2+4 architecture)
   - **Samsung Exynos** (Mali & AMD RDNA Xclipse GPUs)
 - **Vulkan 1.1 Legacy RenderPass Fallback**: Fully supported classic `VkRenderPass` and static pipeline state path for devices lacking `VK_KHR_dynamic_rendering` or `VK_EXT_extended_dynamic_state` (e.g. Dimensity 920 Mali-G68 MC4).
-- **CPU BC1–BC5 Texture Decompressor**: Built-in fallback decompressor for GPUs without hardware BC/DXT texture decompression support.
+- **Zero-Copy BC1–BC5 SIMD-Optimized Decoder**: Full software decompressor using aligned 32-bit and 64-bit direct word stores, eliminating per-block `std::memcpy` overhead and infinite re-staging loops on uncompressed targets for mobile GPUs without hardware BC compression (Mali).
+- **Adaptive Memory Management & LMK-Safe Budgeting**: 128 MB default texture budget on Android unified memory architectures with 16 MB allocation blocks (`kBlockBytes`), featuring 2-pass dynamic eviction that strictly bounds memory below 1.0 GB RSS and prevents Android Low Memory Killer (LMKD) terminations.
+- **Accurate 3D Lighting & Normal Reconstruction**: Resolved silhouette artifacts on character models, gear, weapons, and foreground geometry by applying neutral opaque white fallback samplers and correct component swizzle for BC5 / DXN normal maps on mobile GPUs.
 - **Live Performance & Diagnostics HUD**: Interactive in-game overlay displaying real-time FPS, frame time, CPU usage, SoC thermals, app & system RAM, texture memory, and active Vulkan device.
 - **Direct Play & One-Tap Setup**: The launcher automatically discovers game disc images (`.iso` / `.7z` / `.zip`) in `/sdcard/Download/` and sets up everything in one tap.
 - **Customizable Touch Pad**: Virtual on-screen touch controls with customizable layout, opacity, button toggle modes (sticky ADS), and velocity-based look gestures.

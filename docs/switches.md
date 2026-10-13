@@ -103,7 +103,7 @@ walking to it.
 | `MW2_MSAA=<n>` | R | draws every surface the title multisamples at n samples, rounded down to what the device offers |
 | `MW2_NO_MSAA=1` | R | draws the title's 2x and 4x surfaces at one sample |
 | `MW2_ARENA_MB=<n>` | R | the upload arena for constants, vertices and indices, shared by the frame slots (512) |
-| `MW2_TEXTURE_BUDGET_MB=<n>` | R | the texture cache's budget, past which it lets go of what has not been bound lately, even textures whose memory is unchanged (default half the device-local memory, within 256 MB to 2 GB) |
+| `MW2_TEXTURE_BUDGET_MB=<n>` | R | the texture cache's budget, past which it lets go of what has not been bound lately, even textures whose memory is unchanged (defaults to half the device-local memory within 256 MB to 2 GB on desktop, and 128 MB on Android) |
 | `MW2_PIPELINE_CACHE=<file>` | R | keeps the driver's compiled pipelines across runs |
 | `MW2_SHADER_CACHE=<file>` | R | records every pipeline a run needed and builds them at the next start-up |
 | `MW2_NO_PIPELINE_LIBRARIES=1` | R | builds each pipeline whole at its first draw instead of linking it from shaders compiled at load ([rendering.md](rendering.md)) |

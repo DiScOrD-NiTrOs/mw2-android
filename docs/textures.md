@@ -97,9 +97,13 @@ its slices as a 3D image, a stacked 2D texture its first slice. 96-bit formats
 
 ## Formats
 
-`vk::formats::VulkanFormatFor`. The block-compressed formats go across
-byte for byte, so the untiler's output is the upload and nothing is decoded on
-the CPU.
+`vk::formats::VulkanFormatFor`. On desktop GPUs and mobile Adreno chips with hardware
+BC support, the block-compressed formats go across byte for byte, so the untiler's
+output is uploaded directly without CPU decoding.
+
+On mobile GPUs lacking native BC compression (such as ARM Mali), the runtime utilizes
+an optimized software decompressor (`bc_decoder.cpp`) that decodes BC1, BC2, BC3, and BC5
+into uncompressed formats (RGBA8 / RG8) using direct 32-bit and 64-bit aligned word writes.
 
 | Xenos (id) | Vulkan |
 |---|---|
@@ -150,7 +154,9 @@ describes, uploading it the first time it is seen.
   descriptor's view must match the kind the shader declares; where the title
   binds a 2D texture to a slot the program reads as a cube or volume, a
   fallback image of the declared kind is bound instead. Unbound slots get a
-  1x1 image, since the layout declares all thirty-two.
+  1x1 image (initialized with neutral opaque white texels `(255, 255, 255, 255)`,
+  preventing black silhouette artifacts when lighting tables or ambient maps are unbound),
+  since the layout declares all thirty-two.
 - **Size limit.** An extent beyond `maxImageDimension2D` is rejected before
   anything is created: creating one is undefined behaviour, not an error, and
   a misparsed fetch constant can describe one. Failures are cached per fetch
@@ -172,25 +178,28 @@ describes, uploading it the first time it is seen.
   dwords less the sampler's bits (clamps, filters, anisotropy, border colour)
   name the image, so a texture bound under several sampler states is held
   once.
-- **Memory** comes from 64 MB blocks (`image_memory.cpp`), a range per image.
-  A level streams tens of thousands of small textures through the cache, and
-  an allocation each is what a driver is worst at: freeing one took over half
-  a millisecond with forty thousand live. Anything over a quarter of a block
-  gets an allocation of its own.
+- **Memory** comes from 64 MB blocks on desktop, or **16 MB blocks on Android**
+  (`kBlockBytes` in `image_memory.h`), a range per image. A level streams tens of
+  thousands of small textures through the cache, and an allocation each is what
+  a driver is worst at: freeing one took over half a millisecond with forty
+  thousand live. Anything over a quarter of a block gets an allocation of its own.
 - **Letting go.** The console holds no copies: when the title puts another
   texture where one was, the old one is gone. `NewFrame` looks over the cache
-  once every 64 frames, a slice of the images a frame:
-  - An image is *idle* once unbound for 600 frames, which is past any
-    submission still running, plus one round of the sweep.
+  periodically (every 64 frames on desktop, or every 32 frames on Android):
+  - An image is *idle* once unbound for `kUnusedFrames` (600 frames on desktop,
+    or 120 frames on Android), past any submission still running.
   - An idle image whose pages the write watch saw written, and whose bytes
     then sign differently, is released. Bound again it would have had to be
     read again anyway. This is what keeps the cache near what the level is
     using: without it a streaming level left two gigabytes of such copies in
     seven minutes.
-  - Past the budget (half the device-local memory, or
-    `MW2_TEXTURE_BUDGET_MB`) the idle images bound longest ago go, down to
-    three quarters of it.
-  - A descriptor set not handed out for 600 frames is freed back to its pool.
+  - Past the budget (half the device-local memory clamped between 256 MB – 2 GB on desktop,
+    or **128 MB on Android**, overridable via `MW2_TEXTURE_BUDGET_MB`), a **two-pass
+    eviction** drops idle images down to three quarters of budget:
+    1. *Normal Pass*: Evicts images idle past the sweep window.
+    2. *Emergency Pass*: If still exceeding budget after a streaming rush, drops
+       images unbound for 16 frames (outside the active GPU ring buffer depth).
+  - A descriptor set not handed out for `kUnusedFrames` is freed back to its pool.
     A set is used no later than its images are bound, so an idle image has no
     set left.
   - Released images are destroyed a few a frame (half a millisecond's worth).
