@@ -11,6 +11,7 @@
 #include "objects.h"
 #include "../guest.h"
 #include "../diagnostics.h"
+#include "../env.h"
 #include "../log.h"
 
 #include <algorithm>
@@ -239,7 +240,20 @@ namespace
         const fs::path root = DeviceRoot(device, writable);
 
         fs::path resolved;
-        const bool existed = !relative.empty() && ResolveInsensitive(root, relative, resolved);
+        bool existed = false;
+        if (!writable && !relative.empty())
+        {
+            static const fs::path modDir = [] {
+                if (const char* envMod = env::Text("MW2_MOD_DIR"))
+                    return fs::path(envMod);
+                return GameRoot() / "mods";
+            }();
+            std::error_code ec;
+            if (fs::is_directory(modDir, ec))
+                existed = ResolveInsensitive(modDir, relative, resolved);
+        }
+        if (!existed)
+            existed = !relative.empty() && ResolveInsensitive(root, relative, resolved);
         if (!existed)
         {
             // A name that is not there is only an error until something is allowed
