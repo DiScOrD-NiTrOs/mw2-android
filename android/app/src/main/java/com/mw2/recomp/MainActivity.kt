@@ -123,7 +123,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val gameDirectory = prefs.gameDirectory
+        var gameDirectory = prefs.gameDirectory
+        if (gameDirectory.isEmpty()) {
+            val defaultGameDir = File(getExternalFilesDir(null) ?: filesDir, "game")
+            if (defaultGameDir.exists() && safely(false) { NativeBridge.nativeGameInstalled(defaultGameDir.absolutePath) }) {
+                gameDirectory = defaultGameDir.absolutePath
+                prefs.gameDirectory = gameDirectory
+            }
+        }
         val installed = gameDirectory.isNotEmpty() && safely(false) {
             NativeBridge.nativeGameInstalled(gameDirectory)
         }
