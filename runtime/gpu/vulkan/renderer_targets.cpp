@@ -491,11 +491,42 @@ namespace vk::renderer::detail
         subpass.pColorAttachments = (colourFormat != VK_FORMAT_UNDEFINED) ? &colourRef : nullptr;
         subpass.pDepthStencilAttachment = (depthFormat != VK_FORMAT_UNDEFINED) ? &depthRef : nullptr;
 
+        // Subpass dependencies to prevent tile memory writeback hazards on TBDR GPUs (Mali, Adreno).
+        // Using VK_DEPENDENCY_BY_REGION_BIT ensures dependencies stay within on-chip tile SRAM.
+        VkSubpassDependency dependencies[2]{};
+        uint32_t depCount = 0;
+
+        if (colourFormat != VK_FORMAT_UNDEFINED)
+        {
+            VkSubpassDependency& dep = dependencies[depCount++];
+            dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+            dep.dstSubpass = 0;
+            dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+        }
+
+        if (depthFormat != VK_FORMAT_UNDEFINED)
+        {
+            VkSubpassDependency& dep = dependencies[depCount++];
+            dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+            dep.dstSubpass = 0;
+            dep.srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            dep.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            dep.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            dep.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+        }
+
         VkRenderPassCreateInfo info{ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
         info.attachmentCount = count;
         info.pAttachments = attachments;
         info.subpassCount = 1;
         info.pSubpasses = &subpass;
+        info.dependencyCount = depCount;
+        info.pDependencies = dependencies;
 
         VkRenderPass pass = VK_NULL_HANDLE;
         VkResult r = vkCreateRenderPass(g.device, &info, nullptr, &pass);

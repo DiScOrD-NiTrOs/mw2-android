@@ -583,7 +583,13 @@ namespace vk::renderer::detail
                 }
                 else
                 {
+#ifdef MW2_ANDROID
+                    // On mobile SoCs, allow 120 ms thermal dissipation between cold compilations
+                    // to prevent aggressive OS thermal throttling (e.g. MediaTek/Realme horae at 44C+).
+                    sleepMs = 120;
+#else
                     sleepMs = 35;
+#endif
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
                 if (sleepMs >= 200)
