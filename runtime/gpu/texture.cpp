@@ -304,26 +304,32 @@ namespace
     // Guest memory is big-endian and a texture says how its bytes were grouped
     // when stored. Applied to the whole block: a block's internal layout is
     // the format's business.
+    // Whole words through memcpy, which the compiler turns into vector
+    // shuffles: a rewritten texture is swapped again every time it is read.
+    template <typename Word, typename Swap>
+    void SwapWords(uint8_t* data, size_t size, Swap swap)
+    {
+        for (size_t i = 0; i + sizeof(Word) <= size; i += sizeof(Word))
+        {
+            Word word;
+            std::memcpy(&word, data + i, sizeof word);
+            word = swap(word);
+            std::memcpy(data + i, &word, sizeof word);
+        }
+    }
+
     void SwapEndian(uint8_t* data, size_t size, gpu::TextureEndian endian)
     {
         switch (endian)
         {
         case gpu::TextureEndian::k8in16:
-            for (size_t i = 0; i + 1 < size; i += 2) std::swap(data[i], data[i + 1]);
+            SwapWords<uint16_t>(data, size, [](uint16_t w) { return __builtin_bswap16(w); });
             break;
         case gpu::TextureEndian::k8in32:
-            for (size_t i = 0; i + 3 < size; i += 4)
-            {
-                std::swap(data[i], data[i + 3]);
-                std::swap(data[i + 1], data[i + 2]);
-            }
+            SwapWords<uint32_t>(data, size, [](uint32_t w) { return __builtin_bswap32(w); });
             break;
         case gpu::TextureEndian::k16in32:
-            for (size_t i = 0; i + 3 < size; i += 4)
-            {
-                std::swap(data[i], data[i + 2]);
-                std::swap(data[i + 1], data[i + 3]);
-            }
+            SwapWords<uint32_t>(data, size, [](uint32_t w) { return (w << 16) | (w >> 16); });
             break;
         case gpu::TextureEndian::None:
             break;

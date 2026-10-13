@@ -1,5 +1,5 @@
 // The switches that look at what the renderer drew -- frame and target dumps,
-// the flicker finder, the flash recorder, the traces -- and the report.
+// the flash recorder, the traces -- and the report.
 #include "renderer_state.h"
 #include "../../diagnostics.h"
 #include "capture.h"
@@ -278,59 +278,6 @@ namespace vk::renderer::detail
         return true;
     }
 
-    // MW2_FIND_FLICKER=<frames>: read back up to <frames> presented frames while
-    // the player stands still -- at the end of the walk, and at every corner
-    // under MW2_WALK_PAUSE -- and look for flicker in them: the thing the user
-    // sees, measured without anyone having to see it.
-    //
-    // What separates a flicker from everything else that changes on a still
-    // screen is that it comes back. Wind in the grass, smoke and the weapon's
-    // sway move on and do not return; a flash is a frame that differs from both
-    // its neighbours while the neighbours agree with each other. The screen is
-    // cut into 16x16 cells and a cell flickers at frame t when t-1 and t+1 agree
-    // *pixel for pixel* and t is far from both -- a mean colour per cell
-    // matches by coincidence hundreds of times a second while the camera moves.
-    //
-    // A camera cannot be told apart from a flash by this test when it moves and
-    // comes back, which is what it does for a few frames after the player stops;
-    // so each still period's first frames are skipped, and anything covering more
-    // than a quarter of the screen is counted as the camera and not dumped.
-    //
-    // The three frames around each event are written to MW2_DUMP_FRAMES,
-    // cropped to it, so what was found can be looked at.
-    struct FlickerFinder
-    {
-        static constexpr uint32_t kCell = 16;
-        static constexpr uint32_t kSettle = 12;  // frames of each still period skipped
-        static constexpr float kFar = 30.0f;     // mean |dR|+|dG|+|dB| per pixel of a cell
-        static constexpr float kSame = 6.0f;
-        uint64_t wanted = 0, looked = 0, events = 0, cameraEvents = 0, cellsFlagged = 0;
-        uint64_t dumped = 0, stillPeriods = 0;
-        uint32_t width = 0, height = 0, cols = 0, rows = 0;
-        uint32_t stillFor = 0;
-        // Oldest first: the frame before, the candidate, and the one after.
-        std::vector<uint8_t> pixels[3];
-        uint64_t number[3]{};
-        float x = 0, y = 0, yaw = 0;
-        std::vector<uint32_t> perCell;          // how often each cell flickered
-    };
-    FlickerFinder g_flicker;
-
-    bool FlickerFinderActive()
-    {
-        static const uint64_t want = diag::Number("MW2_FIND_FLICKER");
-        if (!want) return false;
-        g_flicker.wanted = want;
-        const bool still = player::Arrived() || player::Pausing();
-        if (!still)
-        {
-            if (g_flicker.stillFor) g_flicker.stillPeriods++;
-            g_flicker.stillFor = 0;
-            return false;
-        }
-        return g_flicker.looked < want;
-    }
-
     // The rectangle x0,y0 to x1,y1 of an RGBA image `width` wide.
     void WritePnm(const char* dir, const char* name, const std::vector<uint8_t>& rgba,
                   uint32_t width, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
@@ -346,95 +293,7 @@ namespace vk::renderer::detail
         std::fclose(file);
     }
 
-    void LookForFlicker(std::vector<uint8_t>&& rgba, uint32_t width, uint32_t height,
-                        uint64_t frame)
-    {
-        FlickerFinder& f = g_flicker;
-        if (rgba.size() < size_t(width) * height * 4) return;
-        if (!f.cols)
-        {
-            f.width = width; f.height = height;
-            f.cols = width / FlickerFinder::kCell;
-            f.rows = height / FlickerFinder::kCell;
-            f.perCell.assign(size_t(f.cols) * f.rows, 0);
-        }
-        if (width != f.width || height != f.height) return;
-        for (int i = 0; i < 2; i++)
-        {
-            f.pixels[i].swap(f.pixels[i + 1]);
-            f.number[i] = f.number[i + 1];
-        }
-        f.pixels[2] = std::move(rgba);
-        f.number[2] = frame;
-        f.looked++;
-        // All three frames inside one still period, and past its settling.
-        if (++f.stillFor < FlickerFinder::kSettle + 3) return;
-        {
-            player::Where here{};
-            if (player::Locate(here)) { f.x = here.x; f.y = here.y; f.yaw = here.yaw; }
-        }
-
-        const uint8_t* a = f.pixels[0].data();
-        const uint8_t* b = f.pixels[1].data();
-        const uint8_t* c = f.pixels[2].data();
-        const auto diff = [](const uint8_t* p, const uint8_t* q) {
-            return uint32_t(std::abs(int(p[0]) - int(q[0])) + std::abs(int(p[1]) - int(q[1])) +
-                            std::abs(int(p[2]) - int(q[2])));
-        };
-        uint32_t cells = 0, x0 = ~0u, y0 = ~0u, x1 = 0, y1 = 0;
-        std::vector<size_t> hit;
-        constexpr float kPixels = float(FlickerFinder::kCell * FlickerFinder::kCell);
-        for (uint32_t cy = 0; cy < f.rows; cy++)
-            for (uint32_t cx = 0; cx < f.cols; cx++)
-            {
-                uint32_t ac = 0, ab = 0, bc = 0;
-                for (uint32_t y = 0; y < FlickerFinder::kCell; y++)
-                {
-                    const size_t row = (size_t(cy * FlickerFinder::kCell + y) * width +
-                                        cx * FlickerFinder::kCell) * 4;
-                    for (uint32_t x = 0; x < FlickerFinder::kCell * 4; x += 4)
-                    {
-                        ac += diff(a + row + x, c + row + x);
-                        ab += diff(a + row + x, b + row + x);
-                        bc += diff(b + row + x, c + row + x);
-                    }
-                }
-                if (ac / kPixels > FlickerFinder::kSame) continue;
-                if (ab / kPixels < FlickerFinder::kFar || bc / kPixels < FlickerFinder::kFar) continue;
-                cells++;
-                hit.push_back(size_t(cy) * f.cols + cx);
-                x0 = std::min(x0, cx); y0 = std::min(y0, cy);
-                x1 = std::max(x1, cx); y1 = std::max(y1, cy);
-            }
-        if (!cells) return;
-        const bool camera = cells * 4 > f.cols * f.rows;
-        if (camera) { f.cameraEvents++; return; }
-        f.events++;
-        f.cellsFlagged += cells;
-        for (size_t cell : hit) f.perCell[cell]++;
-        LOGI("flicker: frame %llu: %u cells, pixels %u,%u to %u,%u; standing at %.1f %.1f yaw %.1f",
-             (unsigned long long)f.number[1], cells, x0 * FlickerFinder::kCell,
-             y0 * FlickerFinder::kCell, (x1 + 1) * FlickerFinder::kCell,
-             (y1 + 1) * FlickerFinder::kCell, f.x, f.y, f.yaw);
-        if (FrameDumpDirectory() && f.dumped < 60)
-        {
-            f.dumped++;
-            constexpr uint32_t kMargin = 64;
-            const uint32_t px0 = x0 * FlickerFinder::kCell > kMargin ? x0 * FlickerFinder::kCell - kMargin : 0;
-            const uint32_t py0 = y0 * FlickerFinder::kCell > kMargin ? y0 * FlickerFinder::kCell - kMargin : 0;
-            const uint32_t px1 = std::min(f.width, (x1 + 1) * FlickerFinder::kCell + kMargin);
-            const uint32_t py1 = std::min(f.height, (y1 + 1) * FlickerFinder::kCell + kMargin);
-            for (int i = 0; i < 3; i++)
-            {
-                char name[96];
-                std::snprintf(name, sizeof name, "flicker_%06llu_%c_at_%u_%u",
-                              (unsigned long long)f.number[1], "abc"[i], px0, py0);
-                WritePnm(FrameDumpDirectory(), name, f.pixels[i], f.width, px0, py0, px1, py1);
-            }
-        }
-    }
-
-    // The flash recorder, for flashes a person sees and no test finds: the last
+    // The flash recorder, for flashes a person sees: the last
     // MW2_FLASH_FRAMES presented frames are kept, and F7 writes them all to
     // MW2_FLASH_DIR/mark_NN, named by both frame counters so each can be put
     // beside the texture lines of the same frame. The key comes a few hundred
@@ -647,27 +506,6 @@ namespace vk::renderer::detail
         }).detach();
     }
 
-    void ReportFlicker()
-    {
-        const FlickerFinder& f = g_flicker;
-        if (!f.wanted) return;
-        LOGI("flicker: %llu frames looked at over %llu still periods; %llu flashed (%llu cells"
-             " in all), and %llu more moved over a quarter of the screen and were taken for"
-             " the camera",
-             (unsigned long long)f.looked, (unsigned long long)f.stillPeriods + 1,
-             (unsigned long long)f.events, (unsigned long long)f.cellsFlagged,
-             (unsigned long long)f.cameraEvents);
-        // Where on screen, so a flash that always hits one object reads as that.
-        std::vector<std::pair<uint32_t, size_t>> hot;
-        for (size_t i = 0; i < f.perCell.size(); i++)
-            if (f.perCell[i]) hot.push_back({ f.perCell[i], i });
-        std::sort(hot.rbegin(), hot.rend());
-        for (size_t i = 0; i < hot.size() && i < 12; i++)
-            LOGI("flicker:   cell at %u,%u flashed %u times",
-                 uint32_t(hot[i].second % f.cols) * FlickerFinder::kCell,
-                 uint32_t(hot[i].second / f.cols) * FlickerFinder::kCell, hot[i].first);
-    }
-
     // Kept as text because the report is written after the images are gone.
     void SummariseTargets()
     {
@@ -759,7 +597,6 @@ namespace vk::renderer::detail
         if constexpr (!diag::kOn) return plan;
         plan.dump = FrameDumpDirectory() && ((g.frames + 1) % FrameDumpEvery()) == 0 &&
                     FrameDumpDue();
-        plan.look = FlickerFinderActive();
         plan.keep = FlashFramesKept() > 0;
         return plan;
     }
@@ -802,9 +639,6 @@ namespace vk::renderer::detail
             WriteDump(name, frame.data(), g.presentWidth, g.presentHeight);
             if (targetsToo) DumpTargets();
         }
-        if (plan.look && !frame.empty())
-            LookForFlicker(plan.keep ? std::vector<uint8_t>(frame) : std::move(frame),
-                           g.presentWidth, g.presentHeight, g.frames);
         if (plan.keep && !frame.empty())
             KeepFlashFrame(std::move(frame), g.presentWidth, g.presentHeight, g.frames);
         // MW2_FLASH_MARK_AT=<seconds>: a mark nobody pressed, to test the
@@ -927,7 +761,6 @@ void vk::renderer::Report()
     vk::capture::Report();
     vk::display::Report();
     if (!g.draws && !g.frames) return;
-    ReportFlicker();
     if (g.device) { g.pipelineCount = g.pipelines.size(); g.shaderCount = g.shaders.size(); }
     LOGI("renderer: %llu frames, %llu of %llu draws recorded, %llu resolves (%llu of depth),"
          " %zu pipelines over %zu shaders",

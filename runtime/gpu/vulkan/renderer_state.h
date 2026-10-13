@@ -345,6 +345,10 @@ namespace vk::renderer::detail
         std::map<TargetKey, Target> targets;
         std::unordered_map<PipelineKey, VkPipeline, WordsHash> pipelines;
         std::map<uint64_t, Shader> shaders;
+        // The last usable shader of each type ShaderFor answered with: draws
+        // come in runs with the same pair, and an entry stays where it is
+        // until the map is cleared.
+        struct { uint64_t hash; const Shader* shader; } lastShader[2]{};
         // The state-only libraries: the input assembly for each topology, and
         // the output stage for each OutputKey.
         std::map<uint32_t, VkPipeline> inputLibraries;
@@ -398,8 +402,7 @@ namespace vk::renderer::detail
 
         // So a frame is not overwritten while it is on screen.
         VkImage present[kPresentImages]{};
-        // The finished frame copied out for the dumps, the flicker finder and
-        // the flash recorder.
+        // The finished frame copied out for the dumps and the flash recorder.
         VkBuffer readBack = VK_NULL_HANDLE;
         VkDeviceMemory readBackMemory = VK_NULL_HANDLE;
         const uint8_t* readBackMapped = nullptr;
@@ -755,14 +758,14 @@ namespace vk::renderer::detail
     // because a frame read back has to be waited for.
     struct FrameReadBacks
     {
-        bool dump = false, look = false, keep = false;
-        bool Any() const { return dump || look || keep; }
+        bool dump = false, keep = false;
+        bool Any() const { return dump || keep; }
     };
     FrameReadBacks PlanReadBacks();
     // Copies the finished frame out, inside its own command buffer.
     void RecordReadBack(VkImage present);
-    // The dumps, the flicker finder and the flash recorder, once the frame
-    // has been submitted and waited for.
+    // The dumps and the flash recorder, once the frame has been submitted
+    // and waited for.
     void ExamineFrame(bool worldDrawn, const FrameReadBacks& plan);
     void SummariseTargets();
 }

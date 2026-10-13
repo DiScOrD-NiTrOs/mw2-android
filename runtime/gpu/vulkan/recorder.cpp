@@ -14,6 +14,7 @@
 #include "../../crash.h"
 #include "../../env.h"
 #include "../../log.h"
+#include "../../report.h"
 
 #include <atomic>
 #include <thread>
@@ -140,6 +141,7 @@ void* vk::record::detail::Reserve(uint32_t bytes)
         if (end - q.madeSeen > kBytes)
         {
             q.roomWaits++;
+            report::Timed spent(report::kRecorderWait);
             WaitMade(end - kBytes);
             q.madeSeen = q.made.load(std::memory_order_acquire);
         }
@@ -207,6 +209,7 @@ void vk::record::WaitFor(uint64_t position)
 {
     if (Done(position)) return;
     q.waits++;
+    report::Timed spent(report::kRecorderWait);
     WaitMade(position);
 }
 

@@ -238,7 +238,11 @@ REPORT A BUG (`report.cpp`) starts the campaign or the multiplayer with
 the title one starts from its menus writes on in the same log. In that mode
 the game's log names the graphics driver and ends, at exit or at a fault, with
 how the run performed (`runtime/report.cpp`): the frame rate in play, how the
-frame times spread, and what was compiled in the middle of a draw.
+frame times spread, what was compiled in the middle of a draw, and where the
+ring consumer's thread spent play. That last line says what holds a slow run
+back: the thread itself when it is at work nearly all the time, the graphics
+chip when much of that work is waiting for it, and the title's own threads or
+the display when it is neither.
 
 The launcher then writes `reports/mw2-report-<date>-<time>.txt`: the version,
 the system, processor, memory, graphics and displays, the game's own summary,

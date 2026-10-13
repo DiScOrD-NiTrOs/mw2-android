@@ -247,6 +247,10 @@ namespace
         // in: one nothing has bound for kUnusedFrames goes back to its pool.
         struct Set { VkDescriptorSet set; uint32_t pool; uint64_t lastUsed; };
         std::unordered_map<std::array<uint64_t, vk::textures::kSlots>, Set, WordsHash> sets;
+        // The last one DescriptorSet answered with, and its key: draws come in
+        // runs with the same textures. Null whenever a set leaves the map.
+        std::array<uint64_t, vk::textures::kSlots> lastSetKey{};
+        Set* lastSet = nullptr;
         // Sets dropped from the cache all at once, which commands not yet run
         // may still bind: freed when they are that old too.
         std::vector<Set> retiredSets;
@@ -1042,6 +1046,7 @@ void vk::textures::Shutdown()
     g.byFetch.clear();
     g.byContent.clear();
     g.sets.clear();
+    g.lastSet = nullptr;
     g.retiredSets.clear();
     g.samplerList.clear();
     g.samplerIndex.clear();
@@ -1309,10 +1314,12 @@ namespace
         for (const auto& [key, entry] : g.sets)
             g.retiredSets.push_back({ entry.set, entry.pool, g.frame });
         g.sets.clear();
+        g.lastSet = nullptr;
     }
 
     void SweepSets()
     {
+        g.lastSet = nullptr;
         for (auto entry = g.sets.begin(); entry != g.sets.end();)
         {
             if (g.frame - entry->second.lastUsed < kUnusedFrames) { ++entry; continue; }
@@ -1830,10 +1837,17 @@ void* vk::textures::DescriptorSet(const uint64_t ids[kSlots], const uint8_t* kin
     std::array<uint64_t, kSlots> key{};
     for (uint32_t i = 0; i < kSlots; i++)
         key[i] = ids[i] | (uint64_t(kinds ? kinds[i] : 0) << 62);
+    if (g.lastSet && key == g.lastSetKey)
+    {
+        g.lastSet->lastUsed = g.frame;
+        return g.lastSet->set;
+    }
     auto found = g.sets.find(key);
     if (found != g.sets.end())
     {
         found->second.lastUsed = g.frame;
+        g.lastSetKey = key;
+        g.lastSet = &found->second;
         return found->second.set;
     }
 

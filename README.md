@@ -10,6 +10,18 @@ This is **not an emulator**: Xbox 360 PowerPC machine instructions are translate
 
 > **Important**: No copyrighted game assets, executables, or code are included in this repository. You must provide your own legally obtained Xbox 360 game disc image (`Call of Duty: Modern Warfare 2`, version 1.0.557).
 
+## Playing online safely
+
+Play online only with people you trust. The game's 2009 network code is
+unchanged, and it has known security bugs.
+
+- There is no public matchmaking, so a stranger cannot join your game.
+- **Steam** build: only your Steam friends can join, and the game ignores
+  traffic from anyone who is not in your lobby.
+- **LAN** build: anyone on the same network can reach the game.
+
+
+
 ---
 
 ## Highlights & Features

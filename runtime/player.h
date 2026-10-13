@@ -47,8 +47,6 @@ namespace player
     // these rather than on a frame number, which is a guess about how long the
     // walk took and is usually wrong.
     bool Walking();
-    // Standing at a corner under MW2_WALK_PAUSE.
-    bool Pausing();
     // MW2_RECORD_PATH=<file> writes down where the player goes while someone
     // plays, one point every MW2_RECORD_SPACING units (110 by default), as
     // `x y z yaw pitch` a line. MW2_WALK_PATH=<file> walks that route back. A route
@@ -79,7 +77,6 @@ namespace player
     inline bool Locate(Where&) { return false; }
     inline bool Steer(short[4], Press&) { return false; }
     inline bool Walking() { return false; }
-    inline bool Pausing() { return false; }
     inline void Record() {}
     inline void SawPad(uint16_t, uint8_t) {}
     inline bool Arrived() { return false; }

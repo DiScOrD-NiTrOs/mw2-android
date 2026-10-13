@@ -24,10 +24,35 @@ namespace
         // not a slow frame.
         uint64_t intervals = 0, buckets[kBuckets]{};
         double intervalMs = 0, longestMs = 0;
+        // The consumer's times as they stood at the last frame, and what the
+        // intervals counted above took of them.
+        uint64_t spentAtLast[report::kTimeCount]{}, spentInPlay[report::kTimeCount]{};
         uint64_t costCount[report::kCostCount]{}, costMicroseconds[report::kCostCount]{},
                  costLongest[report::kCostCount]{};
         bool written = false;
     } s;
+
+    // Written by the ring consumer between frames, outside the lock.
+    std::atomic<uint64_t> g_spent[report::kTimeCount]{};
+    // When the ring batch being executed began. A frame ends in the middle of
+    // one, so its part up to there is counted with the frame.
+    std::chrono::steady_clock::time_point g_executingSince;
+    bool g_executing = false;
+}
+
+report::Timed::Timed(Time what) : time(what)
+{
+    if (!on) return;
+    began = std::chrono::steady_clock::now();
+    if (time == kExecuting) { g_executingSince = began; g_executing = true; }
+}
+
+report::Timed::~Timed()
+{
+    if (!on) return;
+    if (time == kExecuting) g_executing = false;
+    Spent(time, uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now() - began).count()));
 }
 
 void report::Frame(bool world)
@@ -37,11 +62,17 @@ void report::Frame(bool world)
     std::lock_guard lock(s.lock);
     if (!s.frames) s.first = now;
     s.frames++;
+    uint64_t spent[kTimeCount];
+    for (size_t i = 0; i < kTimeCount; i++) spent[i] = g_spent[i].load(std::memory_order_relaxed);
+    if (g_executing)
+        spent[kExecuting] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          now - g_executingSince).count());
     if (world)
     {
         s.worldFrames++;
         if (s.lastWasWorld)
         {
+            for (size_t i = 0; i < kTimeCount; i++) s.spentInPlay[i] += spent[i] - s.spentAtLast[i];
             const double ms = std::chrono::duration<double, std::milli>(now - s.last).count();
             size_t bucket = 0;
             while (bucket < std::size(kBounds) && ms > kBounds[bucket]) bucket++;
@@ -51,8 +82,14 @@ void report::Frame(bool world)
             s.longestMs = std::max(s.longestMs, ms);
         }
     }
+    std::copy(std::begin(spent), std::end(spent), s.spentAtLast);
     s.lastWasWorld = world;
     s.last = now;
+}
+
+void report::Spent(Time time, uint64_t nanoseconds)
+{
+    g_spent[time].fetch_add(nanoseconds, std::memory_order_relaxed);
 }
 
 void report::Add(Cost cost, uint64_t microseconds)
@@ -82,6 +119,10 @@ void report::Write()
              " %.1f%% longer",
              share(s.buckets[0]), kBounds[0], share(s.buckets[1]), kBounds[1], share(s.buckets[2]), kBounds[2],
              share(s.buckets[3]), kBounds[3], share(s.buckets[4]));
+        auto took = [](Time time) { return double(s.spentInPlay[time]) / 1e4 / s.intervalMs; };
+        LOGI("report: in play, the renderer's thread was at work %.0f%% of the time: %.0f%% waiting for the"
+             " graphics chip, %.0f%% for its recorder thread",
+             took(kExecuting), took(kGpuWait), took(kRecorderWait));
     }
     LOGI("report: compiled at a draw: %llu shaders in %llu ms (the longest %llu ms), %llu pipelines in %llu ms"
          " (the longest %llu ms)",
