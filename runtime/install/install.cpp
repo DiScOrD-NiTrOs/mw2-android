@@ -241,25 +241,18 @@ namespace
             {
                 if (file->size == 0) continue;
                 bool match = true;
-                const uint64_t sampleOffsets[3] = {
-                    0,
-                    file->size / 2,
-                    file->size > 4096 ? file->size - 4096 : 0
-                };
-                char bufDisk[4096], bufSrc[4096];
                 std::ifstream in(to, std::ios::binary);
-                for (uint64_t sampleAt : sampleOffsets)
+                std::vector<char> bufDisk(64 << 10), bufSrc(64 << 10);
+                for (uint64_t at = 0; at < file->size; at += bufDisk.size())
                 {
-                    const size_t checkLen = size_t(std::min<uint64_t>(sizeof(bufDisk), file->size - sampleAt));
-                    in.seekg(std::streamoff(sampleAt));
-                    if (!in.read(bufDisk, checkLen) || size_t(in.gcount()) != checkLen ||
-                        !source->Read(*file, sampleAt, bufSrc, checkLen) ||
-                        std::memcmp(bufDisk, bufSrc, checkLen) != 0)
+                    const size_t checkLen = size_t(std::min<uint64_t>(bufDisk.size(), file->size - at));
+                    if (!in.read(bufDisk.data(), checkLen) || size_t(in.gcount()) != checkLen ||
+                        !source->Read(*file, at, bufSrc.data(), checkLen) ||
+                        std::memcmp(bufDisk.data(), bufSrc.data(), checkLen) != 0)
                     {
                         match = false;
                         break;
                     }
-                    if (file->size <= sizeof(bufDisk)) break;
                 }
                 if (match) continue;
             }
@@ -288,19 +281,40 @@ namespace
                 progress.file = file->name;
             }
             const fs::path to = folder / install::FromUtf8(file->name), partial = fs::path(to) += ".part";
+
+            struct PartCleaner
+            {
+                fs::path target;
+                bool disarmed = false;
+                ~PartCleaner()
+                {
+                    if (!disarmed && !target.empty())
+                    {
+                        std::error_code ec;
+                        fs::remove(target, ec);
+                    }
+                }
+            } cleaner{ partial };
+
             std::ofstream out(partial, std::ios::binary | std::ios::trunc);
             if (!out) { error = "Cannot write " + Utf8(fs::absolute(partial)); return false; }
             for (uint64_t at = 0; at < file->size;)
             {
-                if (progress.cancel) { out.close(); fs::remove(partial, ec); error = "cancelled"; return false; }
+                if (progress.cancel) { out.close(); error = "cancelled"; return false; }
                 const size_t take = size_t(std::min<uint64_t>(buffer.size(), file->size - at));
                 if (!source->Read(*file, at, buffer.data(), take))
                 {
+                    out.close();
                     error = "Could not read " + file->name + " from " + Utf8(from) + ".";
                     return false;
                 }
                 out.write(reinterpret_cast<const char*>(buffer.data()), std::streamsize(take));
-                if (!out) { error = "Could not write " + Utf8(fs::absolute(partial)) + " (disk full?)."; return false; }
+                if (!out)
+                {
+                    out.close();
+                    error = "Could not write " + Utf8(fs::absolute(partial)) + " (disk full?).";
+                    return false;
+                }
                 at += take;
                 std::lock_guard lock(progress.lock);
                 progress.done += take;
@@ -308,6 +322,7 @@ namespace
             out.close();
             fs::rename(partial, to, ec);
             if (ec) { error = "Cannot rename " + Utf8(partial) + ": " + ec.message(); return false; }
+            cleaner.disarmed = true;
         }
         return true;
     }

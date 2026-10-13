@@ -60,6 +60,9 @@ class InstallActivity : AppCompatActivity() {
     @Volatile
     private var copying = false
 
+    @Volatile
+    private var activeCopyStream: java.io.InputStream? = null
+
     private val values = LongArray(2)
 
     private val browse = registerForActivityResult(
@@ -121,6 +124,7 @@ class InstallActivity : AppCompatActivity() {
         cancel.setOnClickListener {
             if (running && NativeBridge.isLoaded()) NativeBridge.nativeCancelInstall()
             copying = false
+            try { activeCopyStream?.close() } catch (_: Throwable) {}
             cancel.isEnabled = false
         }
 
@@ -135,6 +139,7 @@ class InstallActivity : AppCompatActivity() {
                     .setNegativeButton(R.string.cancel, null)
                     .setPositiveButton(R.string.close) { _, _ ->
                         copying = false
+                        try { activeCopyStream?.close() } catch (_: Throwable) {}
                         if (NativeBridge.isLoaded()) NativeBridge.nativeCancelInstall()
                     }
                     .show()
@@ -228,6 +233,7 @@ class InstallActivity : AppCompatActivity() {
             try {
                 contentResolver.openInputStream(uri).use { input ->
                     if (input == null) throw IllegalStateException("no stream")
+                    activeCopyStream = input
                     destination.outputStream().use { output ->
                         val buffer = ByteArray(1 shl 20)
                         var shown = 0L
@@ -259,7 +265,9 @@ class InstallActivity : AppCompatActivity() {
                 }
             } catch (error: Throwable) {
                 destination.delete()
-                failure = error.message ?: "copy failed"
+                failure = if (!copying) getString(R.string.install_cancelled) else (error.message ?: "copy failed")
+            } finally {
+                activeCopyStream = null
             }
             handler.post {
                 copying = false
@@ -393,6 +401,7 @@ class InstallActivity : AppCompatActivity() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
         copying = false
+        try { activeCopyStream?.close() } catch (_: Throwable) {}
         // An install that outlives its screen would write into a folder
         // nobody is watching; it is stopped, and what was copied is kept
         // for next time.

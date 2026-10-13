@@ -251,10 +251,12 @@ namespace
 #endif
         {
             uint32_t available = 0;
-            if (vkEnumerateInstanceVersion(&available) == VK_SUCCESS &&
-                available >= VK_API_VERSION_1_3)
+            if (vkEnumerateInstanceVersion(&available) == VK_SUCCESS)
             {
-                app.apiVersion = VK_API_VERSION_1_3;
+                if (available >= VK_API_VERSION_1_3)
+                    app.apiVersion = VK_API_VERSION_1_3;
+                else if (available >= VK_API_VERSION_1_1)
+                    app.apiVersion = VK_API_VERSION_1_1;
             }
         }
 

@@ -276,6 +276,11 @@ def download(url, into_directory, opener):
             last_error = RuntimeError(f"got {done} bytes of {total}")
             say(f"    attempt {attempt} was cut short; trying again")
             continue
+        if done == 0:
+            os.unlink(path)
+            last_error = RuntimeError("download produced 0 bytes")
+            say(f"    attempt {attempt} was empty (0 bytes); trying again")
+            continue
         return path, name
 
     raise SystemExit(f"Could not fetch {url}: {last_error}")
@@ -487,6 +492,8 @@ def main():
     parser.add_argument("--require", default="",
                         help="comma-separated names that must be there afterwards, "
                              "e.g. default.xex,default_mp.xex")
+    parser.add_argument("--sha256", default="",
+                        help="expected SHA-256 hash of the downloaded asset or archive")
     parser.add_argument("--github-output", action="store_true",
                         help="write the hashes to $GITHUB_OUTPUT as well")
     arguments = parser.parse_args()
@@ -521,6 +528,16 @@ def main():
         else:
             say(f"  {entry.split('?')[0]}")
             path, name = download(entry, arguments.into, opener)
+
+        if arguments.sha256:
+            actual_sha = sha256_of(path)
+            if actual_sha.lower() != arguments.sha256.strip().lower():
+                os.unlink(path)
+                raise SystemExit(
+                    f"    SHA-256 validation failed for {name}:\n"
+                    f"      expected: {arguments.sha256.strip().lower()}\n"
+                    f"      got:      {actual_sha.lower()}"
+                )
 
         if not identify_and_place(path, wanted or name, arguments.into, placed, wanted):
             os.unlink(path)
