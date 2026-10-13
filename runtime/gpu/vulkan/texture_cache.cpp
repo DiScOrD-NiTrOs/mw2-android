@@ -1170,8 +1170,20 @@ namespace
     // shape. False when it could not be.
     bool Restage(Image& image, const gpu::TextureData& data)
     {
-        return data.ok && data.bytes.size() == image.bytes &&
-               StageInto(image, data.bytes.data(), data.bytes.size(), nullptr);
+        if (!data.ok) return false;
+        static const bool s_forceBcDecompress = std::getenv("MW2_FORCE_BC_DECOMPRESS") != nullptr;
+        gpu::TextureData decompressed;
+        const gpu::TextureData* pData = &data;
+        if (vk::bc::IsBCFormat(image.xenosFormat) && (!vk::pipeline::TextureCompressionBC() || s_forceBcDecompress))
+        {
+            int decompFormat = 0;
+            if (vk::bc::Decompress(data, image.xenosFormat, decompressed, decompFormat))
+            {
+                pData = &decompressed;
+            }
+        }
+        return pData->ok && pData->bytes.size() == image.bytes &&
+               StageInto(image, pData->bytes.data(), pData->bytes.size(), nullptr);
     }
 
     gpu::TextureData ReadAgain(const Image& image)

@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.h>
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 namespace vk::bc
 {
@@ -22,91 +23,87 @@ namespace vk::bc
 
     namespace
     {
-        inline void DecodeBC1Block(const uint8_t* block, uint8_t outRgba[16][4], bool forceFourColor = false)
+        // Fast RGB565 to RGBA8 unpack (zero divisions, exact bit-expansion).
+        inline uint32_t Rgb565ToRgba8(uint16_t c)
+        {
+            const uint32_t r = (c >> 11) & 0x1F;
+            const uint32_t g = (c >> 5) & 0x3F;
+            const uint32_t b = c & 0x1F;
+            const uint32_t r8 = (r << 3) | (r >> 2);
+            const uint32_t g8 = (g << 2) | (g >> 4);
+            const uint32_t b8 = (b << 3) | (b >> 2);
+            return r8 | (g8 << 8) | (b8 << 16) | 0xFF000000u;
+        }
+
+        inline void DecodeBC1Palette(const uint8_t* block, uint32_t colors[4], bool forceFourColor = false)
         {
             const uint16_t c0 = block[0] | (uint16_t(block[1]) << 8);
             const uint16_t c1 = block[2] | (uint16_t(block[3]) << 8);
-            const uint32_t bits = block[4] | (uint32_t(block[5]) << 8) |
-                                  (uint32_t(block[6]) << 16) | (uint32_t(block[7]) << 24);
 
-            const uint8_t r0 = ((c0 >> 11) & 0x1F) * 255 / 31;
-            const uint8_t g0 = ((c0 >> 5) & 0x3F) * 255 / 63;
-            const uint8_t b0 = (c0 & 0x1F) * 255 / 31;
+            colors[0] = Rgb565ToRgba8(c0);
+            colors[1] = Rgb565ToRgba8(c1);
 
-            const uint8_t r1 = ((c1 >> 11) & 0x1F) * 255 / 31;
-            const uint8_t g1 = ((c1 >> 5) & 0x3F) * 255 / 63;
-            const uint8_t b1 = (c1 & 0x1F) * 255 / 31;
+            const uint32_t r0 = colors[0] & 0xFF;
+            const uint32_t g0 = (colors[0] >> 8) & 0xFF;
+            const uint32_t b0 = (colors[0] >> 16) & 0xFF;
 
-            uint8_t colors[4][4];
-            colors[0][0] = r0; colors[0][1] = g0; colors[0][2] = b0; colors[0][3] = 255;
-            colors[1][0] = r1; colors[1][1] = g1; colors[1][2] = b1; colors[1][3] = 255;
+            const uint32_t r1 = colors[1] & 0xFF;
+            const uint32_t g1 = (colors[1] >> 8) & 0xFF;
+            const uint32_t b1 = (colors[1] >> 16) & 0xFF;
 
             if (c0 > c1 || forceFourColor)
             {
-                colors[2][0] = (2 * r0 + r1) / 3;
-                colors[2][1] = (2 * g0 + g1) / 3;
-                colors[2][2] = (2 * b0 + b1) / 3;
-                colors[2][3] = 255;
+                const uint32_t r2 = (2 * r0 + r1) / 3;
+                const uint32_t g2 = (2 * g0 + g1) / 3;
+                const uint32_t b2 = (2 * b0 + b1) / 3;
+                colors[2] = r2 | (g2 << 8) | (b2 << 16) | 0xFF000000u;
 
-                colors[3][0] = (r0 + 2 * r1) / 3;
-                colors[3][1] = (g0 + 2 * g1) / 3;
-                colors[3][2] = (b0 + 2 * b1) / 3;
-                colors[3][3] = 255;
+                const uint32_t r3 = (r0 + 2 * r1) / 3;
+                const uint32_t g3 = (g0 + 2 * g1) / 3;
+                const uint32_t b3 = (b0 + 2 * b1) / 3;
+                colors[3] = r3 | (g3 << 8) | (b3 << 16) | 0xFF000000u;
             }
             else
             {
-                colors[2][0] = (r0 + r1) / 2;
-                colors[2][1] = (g0 + g1) / 2;
-                colors[2][2] = (b0 + b1) / 2;
-                colors[2][3] = 255;
-
-                colors[3][0] = 0;
-                colors[3][1] = 0;
-                colors[3][2] = 0;
-                colors[3][3] = 0;
-            }
-
-            for (int i = 0; i < 16; i++)
-            {
-                const uint32_t sel = (bits >> (2 * i)) & 3;
-                outRgba[i][0] = colors[sel][0];
-                outRgba[i][1] = colors[sel][1];
-                outRgba[i][2] = colors[sel][2];
-                outRgba[i][3] = colors[sel][3];
+                const uint32_t r2 = (r0 + r1) / 2;
+                const uint32_t g2 = (g0 + g1) / 2;
+                const uint32_t b2 = (b0 + b1) / 2;
+                colors[2] = r2 | (g2 << 8) | (b2 << 16) | 0xFF000000u;
+                colors[3] = 0x00000000u; // Transparent black
             }
         }
 
-        inline void DecodeBC3AlphaBlock(const uint8_t* block, uint8_t outAlpha[16])
+        inline void DecodeBC3AlphaTable(const uint8_t* block, uint8_t alphas[8], uint64_t& bits)
         {
-            const uint8_t a0 = block[0];
-            const uint8_t a1 = block[1];
-            const uint64_t bits = uint64_t(block[2]) |
-                                  (uint64_t(block[3]) << 8) |
-                                  (uint64_t(block[4]) << 16) |
-                                  (uint64_t(block[5]) << 24) |
-                                  (uint64_t(block[6]) << 32) |
-                                  (uint64_t(block[7]) << 40);
+            alphas[0] = block[0];
+            alphas[1] = block[1];
+            bits = uint64_t(block[2]) |
+                   (uint64_t(block[3]) << 8) |
+                   (uint64_t(block[4]) << 16) |
+                   (uint64_t(block[5]) << 24) |
+                   (uint64_t(block[6]) << 32) |
+                   (uint64_t(block[7]) << 40);
 
-            uint8_t alphas[8];
-            alphas[0] = a0;
-            alphas[1] = a1;
+            const uint32_t a0 = alphas[0];
+            const uint32_t a1 = alphas[1];
             if (a0 > a1)
             {
-                for (int j = 1; j <= 6; j++)
-                    alphas[1 + j] = ((7 - j) * a0 + j * a1) / 7;
+                alphas[2] = uint8_t((6 * a0 + 1 * a1) / 7);
+                alphas[3] = uint8_t((5 * a0 + 2 * a1) / 7);
+                alphas[4] = uint8_t((4 * a0 + 3 * a1) / 7);
+                alphas[5] = uint8_t((3 * a0 + 4 * a1) / 7);
+                alphas[6] = uint8_t((2 * a0 + 5 * a1) / 7);
+                alphas[7] = uint8_t((1 * a0 + 6 * a1) / 7);
             }
             else
             {
-                for (int j = 1; j <= 4; j++)
-                    alphas[1 + j] = ((5 - j) * a0 + j * a1) / 5;
+                alphas[2] = uint8_t((4 * a0 + 1 * a1) / 5);
+                alphas[3] = uint8_t((3 * a0 + 2 * a1) / 5);
+                alphas[4] = uint8_t((4 * a0 + 3 * a1) / 5); // note: 4/5 or 2/5 -> (2 * a0 + 3 * a1) / 5
+                alphas[4] = uint8_t((2 * a0 + 3 * a1) / 5);
+                alphas[5] = uint8_t((1 * a0 + 4 * a1) / 5);
                 alphas[6] = 0;
                 alphas[7] = 255;
-            }
-
-            for (int i = 0; i < 16; i++)
-            {
-                const uint32_t sel = (bits >> (3 * i)) & 7;
-                outAlpha[i] = alphas[sel];
             }
         }
     }
@@ -150,6 +147,18 @@ namespace vk::bc
         dst.minLevel = src.minLevel;
         dst.levels = src.levels;
 
+        if (dst.levels.empty() && dst.width > 0 && dst.height > 0)
+        {
+            gpu::TextureData::Level lvl{};
+            lvl.width = dst.width;
+            lvl.height = dst.height;
+            lvl.blocksWide = src.blocksWide ? src.blocksWide : (dst.width + 3) / 4;
+            lvl.blocksHigh = src.blocksHigh ? src.blocksHigh : (dst.height + 3) / 4;
+            lvl.offset = 0;
+            lvl.size = src.bytes.size();
+            dst.levels.push_back(lvl);
+        }
+
         if (src.bytesPerBlock == 0 || bpp == 0)
         {
             dst.ok = false;
@@ -157,7 +166,21 @@ namespace vk::bc
             return false;
         }
 
+        // Calculate total size up front to avoid reallocations.
+        size_t totalBufferSize = 0;
+        for (const gpu::TextureData::Level& level : dst.levels)
+        {
+            if (level.width == 0 || level.height == 0) continue;
+            const uint32_t numSlices = src.volume ? (level.depth ? level.depth : 1) : (level.layers ? level.layers : 1);
+            if (numSlices == 0) continue;
+            totalBufferSize = (totalBufferSize + 15) & ~size_t(15);
+            totalBufferSize += size_t(level.width) * level.height * numSlices * bpp;
+        }
+
         std::vector<uint8_t> flat;
+        flat.resize(totalBufferSize, 0);
+
+        size_t currentOffset = 0;
 
         for (gpu::TextureData::Level& level : dst.levels)
         {
@@ -194,9 +217,9 @@ namespace vk::bc
                 return false;
             }
 
-            const size_t at = (flat.size() + 15) & ~size_t(15);
+            const size_t at = (currentOffset + 15) & ~size_t(15);
             const size_t levelSize = size_t(levelSize64);
-            flat.resize(at + levelSize, 0);
+            currentOffset = at + levelSize;
 
             for (uint32_t layer = 0; layer < numSlices; layer++)
             {
@@ -205,89 +228,196 @@ namespace vk::bc
 
                 for (uint32_t by = 0; by < level.blocksHigh; by++)
                 {
+                    const uint32_t yBase = by << 2;
+                    const bool fullRows = (yBase + 4 <= level.height);
+
                     for (uint32_t bx = 0; bx < level.blocksWide; bx++)
                     {
+                        const uint32_t xBase = bx << 2;
+                        const bool fullBlock = fullRows && (xBase + 4 <= level.width);
+
                         const size_t blockIdx = (size_t(layer) * level.blocksHigh + by) * level.blocksWide + bx;
                         const size_t blockOffset = level.offset + blockIdx * src.bytesPerBlock;
                         const uint8_t* block = src.bytes.data() + blockOffset;
 
                         if (xenosFormat == 18 || xenosFormat == 51) // BC1
                         {
-                            uint8_t rgba[16][4];
-                            DecodeBC1Block(block, rgba, false);
-                            for (int i = 0; i < 16; i++)
+                            uint32_t colors[4];
+                            DecodeBC1Palette(block, colors, false);
+                            const uint32_t bits = block[4] | (uint32_t(block[5]) << 8) |
+                                                  (uint32_t(block[6]) << 16) | (uint32_t(block[7]) << 24);
+
+                            if (fullBlock)
                             {
-                                const uint32_t x = (bx << 2) + (i & 3);
-                                const uint32_t y = (by << 2) + (i >> 2);
-                                if (x >= level.width || y >= level.height) continue;
-                                const size_t pixelOffset = (y * level.width + x) * 4;
-                                if (sliceOffset + pixelOffset + 4 <= flat.size())
-                                    std::memcpy(dstLayer + pixelOffset, rgba[i], 4);
+                                uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + yBase * level.width + xBase;
+                                const size_t stride = level.width;
+
+                                out[0]          = colors[(bits >> 0) & 3];
+                                out[1]          = colors[(bits >> 2) & 3];
+                                out[2]          = colors[(bits >> 4) & 3];
+                                out[3]          = colors[(bits >> 6) & 3];
+
+                                out[stride + 0] = colors[(bits >> 8) & 3];
+                                out[stride + 1] = colors[(bits >> 10) & 3];
+                                out[stride + 2] = colors[(bits >> 12) & 3];
+                                out[stride + 3] = colors[(bits >> 14) & 3];
+
+                                out[stride * 2 + 0] = colors[(bits >> 16) & 3];
+                                out[stride * 2 + 1] = colors[(bits >> 18) & 3];
+                                out[stride * 2 + 2] = colors[(bits >> 20) & 3];
+                                out[stride * 2 + 3] = colors[(bits >> 22) & 3];
+
+                                out[stride * 3 + 0] = colors[(bits >> 24) & 3];
+                                out[stride * 3 + 1] = colors[(bits >> 26) & 3];
+                                out[stride * 3 + 2] = colors[(bits >> 28) & 3];
+                                out[stride * 3 + 3] = colors[(bits >> 30) & 3];
+                            }
+                            else
+                            {
+                                for (int i = 0; i < 16; i++)
+                                {
+                                    const uint32_t x = xBase + (i & 3);
+                                    const uint32_t y = yBase + (i >> 2);
+                                    if (x < level.width && y < level.height)
+                                    {
+                                        uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + y * level.width + x;
+                                        *out = colors[(bits >> (2 * i)) & 3];
+                                    }
+                                }
                             }
                         }
                         else if (xenosFormat == 19 || xenosFormat == 52) // BC2
                         {
-                            uint8_t rgba[16][4];
-                            DecodeBC1Block(block + 8, rgba, true);
+                            uint32_t colors[4];
+                            DecodeBC1Palette(block + 8, colors, true);
+                            const uint32_t bits = block[12] | (uint32_t(block[13]) << 8) |
+                                                  (uint32_t(block[14]) << 16) | (uint32_t(block[15]) << 24);
+
                             for (int i = 0; i < 16; i++)
                             {
-                                const uint8_t nibble = (block[i / 2] >> ((i & 1) * 4)) & 0xF;
-                                rgba[i][3] = uint8_t(nibble * 17);
-                                const uint32_t x = (bx << 2) + (i & 3);
-                                const uint32_t y = (by << 2) + (i >> 2);
-                                if (x >= level.width || y >= level.height) continue;
-                                const size_t pixelOffset = (y * level.width + x) * 4;
-                                if (sliceOffset + pixelOffset + 4 <= flat.size())
-                                    std::memcpy(dstLayer + pixelOffset, rgba[i], 4);
+                                const uint32_t x = xBase + (i & 3);
+                                const uint32_t y = yBase + (i >> 2);
+                                if (x < level.width && y < level.height)
+                                {
+                                    const uint8_t nibble = (block[i / 2] >> ((i & 1) * 4)) & 0xF;
+                                    const uint32_t alpha8 = uint32_t(nibble) * 17;
+                                    const uint32_t color = (colors[(bits >> (2 * i)) & 3] & 0x00FFFFFFu) | (alpha8 << 24);
+                                    uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + y * level.width + x;
+                                    *out = color;
+                                }
                             }
                         }
                         else if (xenosFormat == 20 || xenosFormat == 53) // BC3
                         {
-                            uint8_t alpha[16];
-                            DecodeBC3AlphaBlock(block, alpha);
-                            uint8_t rgba[16][4];
-                            DecodeBC1Block(block + 8, rgba, true);
-                            for (int i = 0; i < 16; i++)
+                            uint8_t alphas[8];
+                            uint64_t alphaBits = 0;
+                            DecodeBC3AlphaTable(block, alphas, alphaBits);
+
+                            uint32_t colors[4];
+                            DecodeBC1Palette(block + 8, colors, true);
+                            const uint32_t colorBits = block[12] | (uint32_t(block[13]) << 8) |
+                                                       (uint32_t(block[14]) << 16) | (uint32_t(block[15]) << 24);
+
+                            if (fullBlock)
                             {
-                                rgba[i][3] = alpha[i];
-                                const uint32_t x = (bx << 2) + (i & 3);
-                                const uint32_t y = (by << 2) + (i >> 2);
-                                if (x >= level.width || y >= level.height) continue;
-                                const size_t pixelOffset = (y * level.width + x) * 4;
-                                if (sliceOffset + pixelOffset + 4 <= flat.size())
-                                    std::memcpy(dstLayer + pixelOffset, rgba[i], 4);
+                                uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + yBase * level.width + xBase;
+                                const size_t stride = level.width;
+
+                                for (int r = 0; r < 4; r++)
+                                {
+                                    for (int c = 0; c < 4; c++)
+                                    {
+                                        const int idx = r * 4 + c;
+                                        const uint32_t a = alphas[(alphaBits >> (3 * idx)) & 7];
+                                        const uint32_t col = (colors[(colorBits >> (2 * idx)) & 3] & 0x00FFFFFFu) | (a << 24);
+                                        out[r * stride + c] = col;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                for (int i = 0; i < 16; i++)
+                                {
+                                    const uint32_t x = xBase + (i & 3);
+                                    const uint32_t y = yBase + (i >> 2);
+                                    if (x < level.width && y < level.height)
+                                    {
+                                        const uint32_t a = alphas[(alphaBits >> (3 * i)) & 7];
+                                        const uint32_t col = (colors[(colorBits >> (2 * i)) & 3] & 0x00FFFFFFu) | (a << 24);
+                                        uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + y * level.width + x;
+                                        *out = col;
+                                    }
+                                }
                             }
                         }
                         else if (xenosFormat == 59) // BC4 (DXT5A) -> R8
                         {
-                            uint8_t r[16];
-                            DecodeBC3AlphaBlock(block, r);
-                            for (int i = 0; i < 16; i++)
+                            uint8_t rVals[8];
+                            uint64_t rBits = 0;
+                            DecodeBC3AlphaTable(block, rVals, rBits);
+
+                            if (fullBlock)
                             {
-                                const uint32_t x = (bx << 2) + (i & 3);
-                                const uint32_t y = (by << 2) + (i >> 2);
-                                if (x >= level.width || y >= level.height) continue;
-                                const size_t pixelOffset = y * level.width + x;
-                                if (sliceOffset + pixelOffset + 1 <= flat.size())
-                                    dstLayer[pixelOffset] = r[i];
+                                uint8_t* out = dstLayer + yBase * level.width + xBase;
+                                const size_t stride = level.width;
+                                for (int r = 0; r < 4; r++)
+                                {
+                                    const int idx = r * 4;
+                                    out[r * stride + 0] = rVals[(rBits >> (3 * (idx + 0))) & 7];
+                                    out[r * stride + 1] = rVals[(rBits >> (3 * (idx + 1))) & 7];
+                                    out[r * stride + 2] = rVals[(rBits >> (3 * (idx + 2))) & 7];
+                                    out[r * stride + 3] = rVals[(rBits >> (3 * (idx + 3))) & 7];
+                                }
+                            }
+                            else
+                            {
+                                for (int i = 0; i < 16; i++)
+                                {
+                                    const uint32_t x = xBase + (i & 3);
+                                    const uint32_t y = yBase + (i >> 2);
+                                    if (x < level.width && y < level.height)
+                                        dstLayer[y * level.width + x] = rVals[(rBits >> (3 * i)) & 7];
+                                }
                             }
                         }
                         else if (xenosFormat == 49) // BC5 (DXN) -> RG8
                         {
-                            uint8_t r[16];
-                            uint8_t g[16];
-                            DecodeBC3AlphaBlock(block, r);
-                            DecodeBC3AlphaBlock(block + 8, g);
-                            for (int i = 0; i < 16; i++)
+                            uint8_t rVals[8];
+                            uint64_t rBits = 0;
+                            DecodeBC3AlphaTable(block, rVals, rBits);
+
+                            uint8_t gVals[8];
+                            uint64_t gBits = 0;
+                            DecodeBC3AlphaTable(block + 8, gVals, gBits);
+
+                            if (fullBlock)
                             {
-                                const uint32_t x = (bx << 2) + (i & 3);
-                                const uint32_t y = (by << 2) + (i >> 2);
-                                if (x >= level.width || y >= level.height) continue;
-                                const size_t pixelOffset = (y * level.width + x) * 2;
-                                if (sliceOffset + pixelOffset + 2 <= flat.size())
+                                uint16_t* out = reinterpret_cast<uint16_t*>(dstLayer) + yBase * level.width + xBase;
+                                const size_t stride = level.width;
+                                for (int r = 0; r < 4; r++)
                                 {
-                                    dstLayer[pixelOffset + 0] = r[i];
-                                    dstLayer[pixelOffset + 1] = g[i];
+                                    for (int c = 0; c < 4; c++)
+                                    {
+                                        const int idx = r * 4 + c;
+                                        const uint8_t rCh = rVals[(rBits >> (3 * idx)) & 7];
+                                        const uint8_t gCh = gVals[(gBits >> (3 * idx)) & 7];
+                                        out[r * stride + c] = uint16_t(rCh) | (uint16_t(gCh) << 8);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                for (int i = 0; i < 16; i++)
+                                {
+                                    const uint32_t x = xBase + (i & 3);
+                                    const uint32_t y = yBase + (i >> 2);
+                                    if (x < level.width && y < level.height)
+                                    {
+                                        const uint8_t rCh = rVals[(rBits >> (3 * i)) & 7];
+                                        const uint8_t gCh = gVals[(gBits >> (3 * i)) & 7];
+                                        uint16_t* out = reinterpret_cast<uint16_t*>(dstLayer) + y * level.width + x;
+                                        *out = uint16_t(rCh) | (uint16_t(gCh) << 8);
+                                    }
                                 }
                             }
                         }
