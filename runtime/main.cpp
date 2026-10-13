@@ -215,6 +215,7 @@ int mw2::Run(int argc, char** argv)
     LOGI("function table: %zu entries", mapped);
 
     crash::RegisterThread("main thread");
+    platform::SetThreadAffinity(platform::ThreadAffinityRole::PrimeCore);
     player::Record();
     kernel::Initialise(launch.gameRoot);
     gpu::Initialise();

@@ -390,7 +390,14 @@ namespace
         void Heard(const sockaddr_in& from, const Presence& presence)
         {
             if (presence.instance == instance_) return;
-            const std::string name(presence.name, strnlen(presence.name, sizeof presence.name));
+            const size_t rawLen = strnlen(presence.name, sizeof presence.name);
+            std::string name;
+            for (size_t i = 0; i < rawLen; ++i)
+            {
+                const unsigned char ch = static_cast<unsigned char>(presence.name[i]);
+                if (ch >= 32 && ch < 127) name.push_back(static_cast<char>(ch));
+            }
+            if (name.empty()) name = "Player";
             Peer& peer = peers_[name];
             peer.id = IdOf(from);
             peer.account = BigEndian64(presence.account);

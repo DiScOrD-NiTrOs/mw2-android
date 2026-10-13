@@ -22,6 +22,16 @@ namespace platform
     // Only the time nothing else wants.
     void IdleThreadPriority();
 
+    enum class ThreadAffinityRole {
+        PrimeCore,       // Main recompiled game loop (highest frequency core)
+        PerformanceCore, // GPU submit / command recorder / rendering
+        WorkerCore,      // Background shader warmup / audio / file I/O
+        Default          // OS scheduler default
+    };
+
+    // Pin calling thread to the SoC core cluster appropriate for its role.
+    void SetThreadAffinity(ThreadAffinityRole role);
+
     // The calling thread's host stack to stderr. The recompiled functions are
     // named sub_XXXXXXXX, so where symbols resolve this is the guest's stack.
     void PrintBacktrace(const char* why);

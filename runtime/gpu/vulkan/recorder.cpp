@@ -14,6 +14,7 @@
 #include "../../crash.h"
 #include "../../env.h"
 #include "../../log.h"
+#include "../../platform.h"
 #include "../../report.h"
 
 #include <atomic>
@@ -70,6 +71,7 @@ namespace
     void Run()
     {
         crash::RegisterThread("recorder");
+        platform::SetThreadAffinity(platform::ThreadAffinityRole::PerformanceCore);
         uint8_t* const ring = q.ring;
         uint64_t at = q.made.load(std::memory_order_relaxed);
         uint64_t calls = 0;

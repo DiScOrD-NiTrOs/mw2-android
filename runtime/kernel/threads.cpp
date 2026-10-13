@@ -86,6 +86,7 @@ namespace
         {
             Dispatcher* gate = &resumeGate;
             Wait(&gate, 1, false, nullptr);
+            platform::SetThreadAffinity(platform::ThreadAffinityRole::PerformanceCore);
 
             // ExCreateThread's fourth argument is XAPI's thread-startup shim, and the
             // kernel enters that rather than the routine: it installs the per-thread state

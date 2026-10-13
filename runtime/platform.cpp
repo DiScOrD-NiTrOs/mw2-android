@@ -1,7 +1,9 @@
 #include "platform.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -68,6 +70,32 @@ void platform::SetThreadName(const char* name)
 
 void platform::LowerThreadPriority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
 void platform::IdleThreadPriority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE); }
+
+void platform::SetThreadAffinity(ThreadAffinityRole role)
+{
+    if (role == ThreadAffinityRole::Default) return;
+    SYSTEM_INFO sysInfo{};
+    GetSystemInfo(&sysInfo);
+    DWORD numCores = sysInfo.dwNumberOfProcessors;
+    if (numCores <= 1) return;
+
+    DWORD_PTR mask = 0;
+    if (role == ThreadAffinityRole::PrimeCore)
+    {
+        mask = (DWORD_PTR(1) << (numCores - 1));
+    }
+    else if (role == ThreadAffinityRole::PerformanceCore)
+    {
+        for (DWORD i = numCores / 2; i < numCores; ++i)
+            mask |= (DWORD_PTR(1) << i);
+    }
+    else if (role == ThreadAffinityRole::WorkerCore)
+    {
+        for (DWORD i = 0; i < numCores / 2; ++i)
+            mask |= (DWORD_PTR(1) << i);
+    }
+    if (mask) SetThreadAffinityMask(GetCurrentThread(), mask);
+}
 
 // No symbols without a PDB: each frame as its offset in the executable, which
 // `llvm-symbolizer --obj=mw2.exe` turns back into a name on the build machine.
@@ -151,6 +179,119 @@ void platform::IdleThreadPriority()
 {
     sched_param none{};
     if (pthread_setschedparam(pthread_self(), SCHED_IDLE, &none) != 0) LowerThreadPriority();
+}
+
+namespace
+{
+    struct CpuTopology
+    {
+        uint32_t primeMask = 0;
+        uint32_t perfMask = 0;
+        uint32_t workerMask = 0;
+        bool discovered = false;
+    };
+
+    CpuTopology DiscoverCpuTopology()
+    {
+        CpuTopology topo;
+        const long cpus = sysconf(_SC_NPROCESSORS_CONF);
+        if (cpus <= 1) return topo;
+
+        const int maxCpus = std::min(int(cpus), 32);
+        struct CoreFreq { int id; unsigned long freq; };
+        std::vector<CoreFreq> freqs;
+
+        for (int i = 0; i < maxCpus; ++i)
+        {
+            char path[128];
+            std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+            FILE* f = std::fopen(path, "r");
+            unsigned long freq = 0;
+            if (f)
+            {
+                if (std::fscanf(f, "%lu", &freq) == 1) freqs.push_back({ i, freq });
+                std::fclose(f);
+            }
+        }
+
+        if (freqs.size() == size_t(maxCpus) && !freqs.empty())
+        {
+            std::sort(freqs.begin(), freqs.end(), [](const CoreFreq& a, const CoreFreq& b) {
+                return a.freq > b.freq;
+            });
+
+            unsigned long maxFreq = freqs[0].freq;
+            for (const auto& c : freqs)
+            {
+                if (c.freq >= maxFreq * 95 / 100)
+                    topo.primeMask |= (1u << c.id);
+                else if (c.freq >= maxFreq * 75 / 100)
+                    topo.perfMask |= (1u << c.id);
+                else
+                    topo.workerMask |= (1u << c.id);
+            }
+            if (!topo.perfMask) topo.perfMask = topo.primeMask;
+            if (!topo.workerMask) topo.workerMask = topo.perfMask;
+        }
+        else
+        {
+            if (maxCpus >= 8)
+            {
+                topo.primeMask = (1u << 7);
+                topo.perfMask = (1u << 4) | (1u << 5) | (1u << 6);
+                topo.workerMask = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3);
+            }
+            else if (maxCpus >= 4)
+            {
+                topo.primeMask = (1u << (maxCpus - 1));
+                for (int i = maxCpus / 2; i < maxCpus; ++i) topo.perfMask |= (1u << i);
+                for (int i = 0; i < maxCpus / 2; ++i) topo.workerMask |= (1u << i);
+            }
+            else
+            {
+                topo.primeMask = 1u;
+                topo.perfMask = 1u;
+                topo.workerMask = 1u;
+            }
+        }
+
+        topo.discovered = true;
+        return topo;
+    }
+}
+
+void platform::SetThreadAffinity(ThreadAffinityRole role)
+{
+    if (role == ThreadAffinityRole::Default) return;
+    static CpuTopology s_topo = DiscoverCpuTopology();
+    if (!s_topo.discovered) return;
+
+    uint32_t targetMask = 0;
+    switch (role)
+    {
+    case ThreadAffinityRole::PrimeCore:
+        targetMask = s_topo.primeMask ? s_topo.primeMask : s_topo.perfMask;
+        break;
+    case ThreadAffinityRole::PerformanceCore:
+        targetMask = s_topo.perfMask ? s_topo.perfMask : s_topo.primeMask;
+        break;
+    case ThreadAffinityRole::WorkerCore:
+        targetMask = s_topo.workerMask ? s_topo.workerMask : s_topo.perfMask;
+        break;
+    default:
+        return;
+    }
+
+    if (!targetMask) return;
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    for (int i = 0; i < 32; ++i)
+    {
+        if (targetMask & (1u << i))
+            CPU_SET(i, &cpuset);
+    }
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 }
 
 #if defined(__ANDROID__)

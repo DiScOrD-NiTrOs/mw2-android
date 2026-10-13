@@ -469,6 +469,7 @@ namespace vk::renderer::detail
         void Worker()
         {
             platform::LowerThreadPriority();
+            platform::SetThreadAffinity(platform::ThreadAffinityRole::WorkerCore);
             LOGI("warmup: scheduler worker thread started");
             while (!g_warmupStopping.load(std::memory_order_relaxed))
             {
