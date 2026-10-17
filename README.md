@@ -10,8 +10,9 @@ files are included; you need your own disc.
 
 ## Playing online safely
 
-Play online only with people you trust. The game's 2009 network code is
-unchanged, and it has known security bugs.
+The known security bugs in the game's 2009 network code are fixed
+([docs/security.md](docs/security.md)). It is still old code: play online only
+with people you trust.
 
 - There is no public matchmaking, so a stranger cannot join your game.
 - **Steam** build: only your Steam friends can join, and the game ignores

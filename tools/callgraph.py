@@ -35,10 +35,10 @@ if __name__=="__main__":
     cmd=sys.argv[1]
     if cmd=="callers":
         t=int(sys.argv[2],16)
-        for c in sorted(callers.get(t,())): print(f"0x{c:08X}")
+        for c in sorted(callers.get(t,())): print(f"0x{c:08X}  {title.label(c)}")
     elif cmd=="callees":
         c=int(sys.argv[2],16)
-        for t in sorted(callees.get(c,())): print(f"0x{t:08X}  ({len(callers.get(t,()))} callers)")
+        for t in sorted(callees.get(c,())): print(f"0x{t:08X}  ({len(callers.get(t,()))} callers)  {title.label(t)}")
     elif cmd=="cross":
         # functions in [lo,hi) called from outside [lo,hi)
         lo=int(sys.argv[2],16); hi=int(sys.argv[3],16)
@@ -49,8 +49,8 @@ if __name__=="__main__":
                 if out: rows.append((len(out),t,sorted(out)))
         rows.sort(reverse=True)
         print(f"{len(rows)} entry points into [{lo:08X},{hi:08X}) from outside")
-        for n,t,out in rows: print(f"0x{t:08X}  {n} external callers")
+        for n,t,out in rows: print(f"0x{t:08X}  {n} external callers  {title.label(t)}")
     elif cmd=="funcs":
         lo=int(sys.argv[2],16); hi=int(sys.argv[3],16)
         for a,s in FUNCS:
-            if lo<=a<hi: print(f"0x{a:08X}  size 0x{s:X}  {len(callers.get(a,()))} callers")
+            if lo<=a<hi: print(f"0x{a:08X}  size 0x{s:X}  {len(callers.get(a,()))} callers  {title.label(a)}")

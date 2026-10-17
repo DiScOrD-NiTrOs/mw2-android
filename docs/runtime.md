@@ -17,6 +17,7 @@ individual guest functions.
 | sound | [audio.md](audio.md) |
 | saved games and the profile | [saves.md](saves.md) |
 | networking and the online services | [multiplayer.md](multiplayer.md) |
+| security fixes in the network code | [security.md](security.md) |
 | switches | [switches.md](switches.md) |
 
 ## Guest address space

@@ -45,6 +45,12 @@ bool guest::Commit(uint32_t address, uint32_t size)
 // time it is touched, wherever it is. Windows only backs what is committed, so
 // the fault handler commits a reserved page the guest touches: the same
 // memory, zeroed, on first use.
+//
+// That includes the first pages. A read through a null guest pointer returns
+// zero where the console faults, so a title function whose only hazard is a
+// null base needs no guard here: G_GetClientScore (sub_82231F10 in the
+// multiplayer) reads level.clients[index].score with level.clients null while
+// no game is loaded, which iw4x guards on the PC, and returns 0 on both systems.
 bool guest::CommitOnTouch(const void* address)
 {
 #ifdef _WIN32

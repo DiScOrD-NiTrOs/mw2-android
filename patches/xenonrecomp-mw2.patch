@@ -257,7 +257,7 @@ index d08371e..7790ebb 100644
      std::ofstream f(argv[2]);
      f.write(out.data(), out.size());
 diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
-index fa91527..5bb8024 100644
+index fa91527..988246c 100644
 --- a/XenonRecomp/recompiler.cpp
 +++ b/XenonRecomp/recompiler.cpp
 @@ -609,7 +609,10 @@ bool Recompiler::Recompile(
@@ -285,6 +285,34 @@ index fa91527..5bb8024 100644
              println("\t}}");
  
              switchTable = config.switchTables.end();
+@@ -827,23 +833,23 @@ bool Recompiler::Recompile(
+         break;
+ 
+     case PPC_INST_DIVD:
+-        println("\t{}.s64 = {}.s64 / {}.s64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.s64 = PPCDivide({}.s64, {}.s64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+         break;
+ 
+     case PPC_INST_DIVDU:
+-        println("\t{}.u64 = {}.u64 / {}.u64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPCDivide({}.u64, {}.u64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+         if (strchr(insn.opcode->name, '.'))
+             println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
+         break;
+ 
+     case PPC_INST_DIVW:
+-        println("\t{}.s32 = {}.s32 / {}.s32;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.s32 = PPCDivide({}.s32, {}.s32);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+         if (strchr(insn.opcode->name, '.'))
+             println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
+         break;
+ 
+     case PPC_INST_DIVWU:
+-        println("\t{}.u32 = {}.u32 / {}.u32;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u32 = PPCDivide({}.u32, {}.u32);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+         if (strchr(insn.opcode->name, '.'))
+             println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
+         break;
 @@ -1260,7 +1266,7 @@ bool Recompiler::Recompile(
          break;
  
@@ -641,10 +669,19 @@ index fa91527..5bb8024 100644
          return false;
      }
 diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
-index 31a86cd..105f357 100644
+index 31a86cd..2a6c22e 100644
 --- a/XenonUtils/ppc_context.h
 +++ b/XenonUtils/ppc_context.h
-@@ -682,6 +682,22 @@ inline simde__m128i simde_mm_vctsxs(simde__m128 src1)
+@@ -11,6 +11,8 @@
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
++#include <limits>
++#include <type_traits>
+ 
+ #include <x86/avx.h>
+ #include <x86/sse.h>
+@@ -682,6 +684,22 @@ inline simde__m128i simde_mm_vctsxs(simde__m128 src1)
      return simde_mm_andnot_si128(simde_mm_castps_si128(xmm2), simde_mm_castps_si128(dest));
  }
  
@@ -667,10 +704,25 @@ index 31a86cd..105f357 100644
  inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b)
  {
      b = simde_mm_srli_epi64(simde_mm_slli_epi64(b, 61), 61);
-@@ -700,4 +716,13 @@ inline uint64_t __rdtsc()
+@@ -700,4 +718,28 @@ inline uint64_t __rdtsc()
  #   error "Missing implementation for __rdtsc()"
  #endif
  
++// PowerPC's divide does not trap: a zero divisor, or the one signed quotient
++// that overflows (most negative / -1), leaves the result undefined and the
++// program goes on. The host's divide traps on both, so a value a peer sends
++// as a divisor would end the process. These give 0, as Xenia does. The trap
++// the title's compiler puts beside a divide (twllei rX,0) is not emitted,
++// also as in Xenia.
++template<typename T>
++inline T PPCDivide(T a, T b) noexcept
++{
++    if (b == 0) return 0;
++    if constexpr (std::is_signed_v<T>)
++        if (b == -1 && a == std::numeric_limits<T>::min()) return 0;
++    return a / b;
++}
++
 +// What mftb reads. The console's timebase runs at 50 MHz and titles assume it
 +// without asking -- MW2's server thread turns ticks into milliseconds with a
 +// constant 1/50000 -- so the host supplies a counter at that rate rather than
