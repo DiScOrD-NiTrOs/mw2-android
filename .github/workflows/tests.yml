@@ -1,0 +1,54 @@
+# The checks `ctest` runs -- the durable write, the log's repeat counting and the
+# software block-compressed decoder -- on a tree that has none of the game.
+#
+# The other workflows here build the game, which needs the disc's executables
+# from a private repository and hundreds of minutes; that is why they are run by
+# hand. This one needs neither: it configures tests/ on its own, because the
+# root CMakeLists refuses to configure without the recompiled guest code, then
+# builds three small programs and runs them in about a minute. So it runs on
+# every push and pull request: a regression in the save path, the log or the
+# decoder reaching a release costs more than this job does.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install the toolchain
+        run: |
+          # bc_decoder.cpp includes the Vulkan headers for the format constants
+          # it answers with. It opens no device and calls into no driver, so
+          # nothing more of Vulkan is wanted and the job needs no GPU.
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libvulkan-dev
+
+      - name: Configure the checks
+        run: cmake -S tests -B build-tests -G Ninja
+
+      - name: Build them
+        run: cmake --build build-tests
+
+      - name: Run them
+        run: |
+          # --no-tests=error, because ctest exits 0 when it finds no tests at
+          # all: a tree that registered nothing would otherwise report success
+          # by running nothing.
+          ctest --test-dir build-tests --no-tests=error --output-on-failure
+          # And the count, against what tests/CMakeLists.txt registers: a check
+          # that quietly stops being registered is then a failure rather than
+          # one line less of output, with no number here to keep in step.
+          registered=$(ctest --test-dir build-tests -N | sed -n 's/^Total Tests: //p')
+          expected=$(grep -c '^add_test(' tests/CMakeLists.txt)
+          echo "registered checks: $registered, expected: $expected"
+          [ "$registered" = "$expected" ]

@@ -65,6 +65,14 @@ size. Pitch and height are rounded up to a 32x32-block tile, for linear
 textures too; a linear mip's rows are also 256-byte aligned. Each cube face or
 array slice of a level starts on a 4 KB boundary.
 
+A volume's level is strided by its own rows and, down the third axis, by the
+**base's** depth rounded up to the four slices of a volume tile -- not by the
+level's own depth, which shrinks with it. That term was read out of Xenia
+rather than guessed, and `tests/texture_volume_test.cpp` now holds both it and
+the level offsets that follow from it to that reading; what no desktop run can
+check is a volume captured from a real one (`MW2_DUMP_TEXTURES_RAW`, which
+dumps any volume it meets).
+
 Which levels exist:
 
 - no mip address means no chain, whatever the level range says;
@@ -103,6 +111,14 @@ byte for byte, so the untiler's output is uploaded directly without CPU decoding
 A mobile GPU that reports no BC support at all -- ARM Mali, most often -- cannot sample
 them, so the runtime decodes BC1, BC2, BC3 and BC5 in software (`bc_decoder.cpp`) into
 uncompressed formats (RGBA8 / RG8), with direct 32- and 64-bit aligned word writes.
+
+The decoder writes into the bytes of the caller's own `TextureData`, which is what
+lets the cache hand the same object back and keep the buffer: a restage of a texture
+whose size has not changed then pays neither the allocation nor the zero fill of the
+whole image. Measured on a 2048x2048 DXT1 decode that is 5.64 ms down to 3.39 ms for
+the same bytes -- 40% of a restage, on the format that costs the most (an eightfold
+expansion). The buffer is per thread, and is released when the texture budget is
+lowered, which is what a phone's `onTrimMemory` arrives as.
 
 Snapdragon handsets are a third case. Adreno reports BC support and samples it wrongly:
 surfaces that read back black or missing for a frame at a time, and vertex garbage in

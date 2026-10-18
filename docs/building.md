@@ -363,12 +363,29 @@ What `ctest` runs instead asserts, so it passes or fails on its own:
 
     cmake --build build && ctest --test-dir build --output-on-failure
 
+They can also be configured on their own, which is what CI does: the root
+`CMakeLists.txt` will not configure without the recompiled guest code, and a
+runner has none of it.
+
+    cmake -S tests -B build-tests -G Ninja
+    cmake --build build-tests && ctest --test-dir build-tests --output-on-failure
+
+Both entry points build the same three targets from `tests/CMakeLists.txt`
+([.github/workflows/tests.yml](../.github/workflows/tests.yml), which runs them
+on every push and pull request).
+
 | test | what |
 |---|---|
 | `durable` (`tests/durable_test.cpp`) | that a save survives losing the process part-way: a replacement leaves the previous contents whole, a successful write leaves no `.tmp`, one left by a dead run is not mistaken for the target, and sizes round-trip across block boundaries ([saves.md](saves.md#surviving-an-interrupted-write)) |
+| `log` (`tests/log_repeat_test.cpp`) | the rule that keeps a run readable: a line that repeats is written as it doubles with the count beside it, two lines differing only by an address are one kind, and a repetition in progress cannot flood ([switches.md](switches.md), `MW2_LOG_ALL`) |
+| `bc` (`tests/bc_decoder_test.cpp`) | the software block-compressed decoder (`bc_decoder.cpp`) against a reference written from the formats themselves, over random blocks and odd sizes: DXT1's three-colour mode, DXT3's four-bit alpha, DXT5's two alpha modes, BC5's two channels, levels, short payloads, impossible formats, and that decoding into a reused output buffer gives what a fresh one gave ([textures.md](textures.md#formats)) |
+| `volume` (`tests/texture_volume_test.cpp`) | where each level of a 3D texture lives in guest memory and that untiling one reads every level from its own place, against Xenia's `GetGuestTextureLayout` transcribed for the comparison — the depth term of a volume's level stride, which no desktop run could confirm ([textures.md](textures.md#layout-in-guest-memory)) |
 
-It needs no disc, no game files and no GPU, which is the point — it is the one
-check that runs anywhere, including on a tree that cannot build the runtime.
+None of them needs a disc, a game file or a GPU, which is the point — they run
+anywhere, including on a tree that cannot build the runtime. On Windows they are
+linked `-static` like the game, so one that needs a libstdc++ symbol the
+shell's `PATH` cannot supply (a `std::filesystem` one, say) starts, rather than
+failing with `0xc0000139` before it can run a single check.
 
 ### Docs
 

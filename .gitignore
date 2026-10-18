@@ -25,6 +25,9 @@ config/mw2_switch_tables.toml
 /build/
 /build-release/
 /build-win*/
+# The checks' own build (tests/CMakeLists.txt), which needs none of the game:
+# cmake -S tests -B build-tests -G Ninja
+/build-tests/
 /out/
 
 # ---- editor / OS ----

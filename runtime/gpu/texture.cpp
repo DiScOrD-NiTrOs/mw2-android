@@ -267,9 +267,14 @@ namespace
         s.sliceRows = fetch.Dimension() == gpu::TextureDimension::D1
                         ? 1 : AlignUp(AlignUp(rowsTexels, info.blockHeight) / info.blockHeight, 32);
         size_t slice = size_t(s.rowBytes) * s.sliceRows;
-        // A volume's every level is strided by the base's depth, rounded to the
-        // four slices of a volume tile -- Xenia's reading, not yet checked
-        // against a volume with mips.
+        // A volume's every level is strided by the base's depth -- not the
+        // level's own, which shrinks with it -- that depth rounded up to the
+        // four slices of a volume tile. Xenia's GetGuestTextureLayout, and the
+        // term that had to be read out of it rather than guessed:
+        // tests/texture_volume_test.cpp now holds this, and the level offsets it
+        // produces, to that reading. What no desktop run can check is a volume
+        // captured from a real one -- runtime/gpu/census.cpp dumps any volume it
+        // meets, for exactly that.
         if (fetch.Dimension() == gpu::TextureDimension::D3) slice *= AlignUp(fetch.Depth(), 4);
         s.sliceExtent = slice;
         s.sliceStride = (slice + 4095) & ~size_t(4095);
