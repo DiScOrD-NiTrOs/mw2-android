@@ -12,6 +12,10 @@ val repositoryRoot = file("../..")
 // of this file (.github/workflows/android.yml):
 //
 //   MW2_NDK_VERSION        which NDK to use, when the runner has another one
+//   MW2_VERSION_NAME       the release this apk is, without the leading "v"
+//                          ("0.0.2-alpha"); the workflow takes it from the tag
+//   MW2_VERSION_CODE       the number Android compares to decide whether an apk
+//                          is an update; the workflow sets it when it must
 //   MW2_NATIVE_OPTIMISATION  -O2 compiles the recompiled tree a good deal
 //                          quicker than -O3 and runs within a few percent of
 //                          it; a runner with six hours cares about that
@@ -51,13 +55,17 @@ android {
         // Bump EVERY published release: Android refuses to install an update
         // whose versionCode is at or below the installed one. CI may set
         // MW2_VERSION_CODE instead of editing this file.
-        versionCode = setting("MW2_VERSION_CODE")?.toIntOrNull() ?: 15
+        // 16: v0.0.2-alpha, over 15 (v0.0.2).
+        versionCode = setting("MW2_VERSION_CODE")?.toIntOrNull() ?: 16
         // Which build this is, carried inside the apk. "The wrong apk" has
         // cost more than one evening, and every time the only way to settle
         // it was to guess. The launcher shows this and Android's app info
         // shows it, so the file on the phone can be matched against the run
         // that made it without downloading anything twice.
-        versionName = "1.0 (${setting("MW2_BUILD_SHA") ?: "local"})"
+        // The release the build is from, which is what a report has to say to
+        // be acted on. It was "1.0" -- a number no release ever had.
+        versionName = "${setting("MW2_VERSION_NAME") ?: "0.0.2-alpha"} " +
+            "(${setting("MW2_BUILD_SHA") ?: "local"})"
         buildConfigField("String", "BUILD_SHA", "\"${setting("MW2_BUILD_SHA") ?: "local"}\"")
         buildConfigField("String", "BUILD_STAMP", "\"${setting("MW2_BUILD_STAMP") ?: "unstamped"}\"")
 

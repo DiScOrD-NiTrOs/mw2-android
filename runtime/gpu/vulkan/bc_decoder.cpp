@@ -315,18 +315,52 @@ namespace vk::bc
                             DecodeBC1Palette(block + 8, colors, true);
                             const uint32_t bits = block[12] | (uint32_t(block[13]) << 8) |
                                                   (uint32_t(block[14]) << 16) | (uint32_t(block[15]) << 24);
+                            // The four colours without an alpha byte, made once for the
+                            // block: writing the block's own alpha over them pixel by
+                            // pixel is what each pixel's mask was for.
+                            for (int i = 0; i < 4; i++) colors[i] &= 0x00FFFFFFu;
 
-                            for (int i = 0; i < 16; i++)
+                            // A row at a time, the way the BC1 path above does it:
+                            // every index in a row is at a known shift of a word
+                            // already loaded, and the sixteen-bit alphas of the
+                            // row are the two bytes at 2*r. Walking all sixteen
+                            // pixels with a computed x, y and shift instead is
+                            // what this cost (a 2048x2048 decode: 10.1 ms before,
+                            // 4.7 after; tools/bc_bench.cpp times it, and
+                            // tests/bc_decoder_test.cpp holds the output).
+                            if (fullBlock)
                             {
-                                const uint32_t x = xBase + (i & 3);
-                                const uint32_t y = yBase + (i >> 2);
-                                if (x < level.width && y < level.height)
+                                uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + yBase * level.width + xBase;
+                                const size_t stride = level.width;
+
+                                for (int r = 0; r < 4; r++)
                                 {
-                                    const uint8_t nibble = (block[i / 2] >> ((i & 1) * 4)) & 0xF;
-                                    const uint32_t alpha8 = uint32_t(nibble) * 17;
-                                    const uint32_t color = (colors[(bits >> (2 * i)) & 3] & 0x00FFFFFFu) | (alpha8 << 24);
-                                    uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + y * level.width + x;
-                                    *out = color;
+                                    const uint32_t c = bits >> (8 * r);
+                                    const uint32_t low = block[2 * r], high = block[2 * r + 1];
+                                    uint32_t* row = out + r * stride;
+
+                                    // n*17<<24 is n*0x11000000: the four-bit alpha
+                                    // repeated into a byte, in the top byte.
+                                    row[0] = colors[(c >> 0) & 3] | (low & 0xF) * 0x11000000u;
+                                    row[1] = colors[(c >> 2) & 3] | (low >> 4) * 0x11000000u;
+                                    row[2] = colors[(c >> 4) & 3] | (high & 0xF) * 0x11000000u;
+                                    row[3] = colors[(c >> 6) & 3] | (high >> 4) * 0x11000000u;
+                                }
+                            }
+                            else
+                            {
+                                for (int i = 0; i < 16; i++)
+                                {
+                                    const uint32_t x = xBase + (i & 3);
+                                    const uint32_t y = yBase + (i >> 2);
+                                    if (x < level.width && y < level.height)
+                                    {
+                                        const uint8_t nibble = (block[i / 2] >> ((i & 1) * 4)) & 0xF;
+                                        const uint32_t alpha8 = uint32_t(nibble) * 17;
+                                        const uint32_t color = (colors[(bits >> (2 * i)) & 3] & 0x00FFFFFFu) | (alpha8 << 24);
+                                        uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + y * level.width + x;
+                                        *out = color;
+                                    }
                                 }
                             }
                         }
@@ -340,21 +374,36 @@ namespace vk::bc
                             DecodeBC1Palette(block + 8, colors, true);
                             const uint32_t colorBits = block[12] | (uint32_t(block[13]) << 8) |
                                                        (uint32_t(block[14]) << 16) | (uint32_t(block[15]) << 24);
+                            // The colours without their alpha byte, and the eight
+                            // alphas already in theirs: both are the same for
+                            // every pixel of the block, and this is where a BC3
+                            // block's extra cost over a BC1 one lives.
+                            for (int i = 0; i < 4; i++) colors[i] &= 0x00FFFFFFu;
+                            uint32_t lifted[8];
+                            for (int i = 0; i < 8; i++) lifted[i] = uint32_t(alphas[i]) << 24;
 
                             if (fullBlock)
                             {
                                 uint32_t* out = reinterpret_cast<uint32_t*>(dstLayer) + yBase * level.width + xBase;
                                 const size_t stride = level.width;
 
+                                // Row at a time, and each row's twelve alpha bits
+                                // and eight colour bits shifted out once rather
+                                // than per pixel (the nested loops this replaces
+                                // cost 7.1 ms against 6.4 for a 2048x2048
+                                // decode: most of a BC3 block is the block's own
+                                // alphas, which no arrangement of this avoids;
+                                // tools/bc_bench.cpp).
                                 for (int r = 0; r < 4; r++)
                                 {
-                                    for (int c = 0; c < 4; c++)
-                                    {
-                                        const int idx = r * 4 + c;
-                                        const uint32_t a = alphas[(alphaBits >> (3 * idx)) & 7];
-                                        const uint32_t col = (colors[(colorBits >> (2 * idx)) & 3] & 0x00FFFFFFu) | (a << 24);
-                                        out[r * stride + c] = col;
-                                    }
+                                    const uint64_t a = alphaBits >> (12 * r);
+                                    const uint32_t c = colorBits >> (8 * r);
+                                    uint32_t* row = out + r * stride;
+
+                                    row[0] = colors[(c >> 0) & 3] | lifted[(a >> 0) & 7];
+                                    row[1] = colors[(c >> 2) & 3] | lifted[(a >> 3) & 7];
+                                    row[2] = colors[(c >> 4) & 3] | lifted[(a >> 6) & 7];
+                                    row[3] = colors[(c >> 6) & 3] | lifted[(a >> 9) & 7];
                                 }
                             }
                             else
@@ -417,15 +466,17 @@ namespace vk::bc
                             {
                                 uint16_t* out = reinterpret_cast<uint16_t*>(dstLayer) + yBase * level.width + xBase;
                                 const size_t stride = level.width;
+                                // Both channels' twelve bits per row, shifted once
+                                // (a 2048x2048 decode: 6.7 ms before, 6.4 after).
                                 for (int r = 0; r < 4; r++)
                                 {
-                                    for (int c = 0; c < 4; c++)
-                                    {
-                                        const int idx = r * 4 + c;
-                                        const uint8_t rCh = rVals[(rBits >> (3 * idx)) & 7];
-                                        const uint8_t gCh = gVals[(gBits >> (3 * idx)) & 7];
-                                        out[r * stride + c] = uint16_t(rCh) | (uint16_t(gCh) << 8);
-                                    }
+                                    const uint64_t r3 = rBits >> (12 * r), g3 = gBits >> (12 * r);
+                                    uint16_t* row = out + r * stride;
+
+                                    row[0] = uint16_t(rVals[(r3 >> 0) & 7]) | (uint16_t(gVals[(g3 >> 0) & 7]) << 8);
+                                    row[1] = uint16_t(rVals[(r3 >> 3) & 7]) | (uint16_t(gVals[(g3 >> 3) & 7]) << 8);
+                                    row[2] = uint16_t(rVals[(r3 >> 6) & 7]) | (uint16_t(gVals[(g3 >> 6) & 7]) << 8);
+                                    row[3] = uint16_t(rVals[(r3 >> 9) & 7]) | (uint16_t(gVals[(g3 >> 9) & 7]) << 8);
                                 }
                             }
                             else

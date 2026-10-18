@@ -202,6 +202,21 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Check the tag is one a build can be compared against
+        run: |
+          # A release is looked up by the launcher and compared with the version
+          # it is running, so its tag has to be a version: v0.4.2, v0.0.2-alpha,
+          # v0.1.0-alpha.13. A tag of any other shape is published and shown, but
+          # every player's launcher reads it as "not a version" and offers
+          # nothing -- which is how this project's own -alpha tags went
+          # unoffered. Failing here rather than there is the point.
+          tag="${{ inputs.version }}"
+          if ! printf '%s' "$tag" | grep -Eq '^v?[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$tag' is not a version tag. Use v0.0.2-alpha, not $tag."
+            exit 1
+          fi
+          echo "$tag is a version tag."
+
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -218,5 +233,15 @@ jobs:
           Take `steam` to play online through Steam, `lan` to play on a local network.
           Extract it anywhere and start `mw2-launcher`: it installs the game from your ISO, then starts it.
           EOF
-          gh release create "${{ inputs.version }}" dist/* --repo "${{ github.repository }}" \
-            --draft --title "${{ inputs.version }}" --notes-file notes.md --target "${{ github.sha }}"
+          # A tag with a suffix after its version is a pre-release
+          # (v0.0.2-alpha), and is drafted as one: GitHub's "latest release"
+          # -- the one a launcher asks for -- is never a pre-release, so nobody
+          # is moved onto an alpha they did not choose. Publishing it is still
+          # a deliberate step; this only sets what kind of release it is.
+          tag="${{ inputs.version }}"
+          kind=()
+          case "$tag" in
+            *-*) kind=(--prerelease) ;;
+          esac
+          gh release create "$tag" dist/* --repo "${{ github.repository }}" \
+            --draft "${kind[@]}" --title "$tag" --notes-file notes.md --target "${{ github.sha }}"

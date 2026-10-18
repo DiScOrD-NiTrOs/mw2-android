@@ -357,7 +357,11 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 
 `translate-shader` and `upload-texture` above are harnesses to be read: they run
 a stage without the game and print what it did, and a person decides whether it
-looks right.
+looks right. `bc-bench` is a third and prints only a number — how long one
+2048x2048 software block-compressed decode takes, in each format the decoder
+answers for ([tools/bc_bench.cpp](../tools/bc_bench.cpp)). It is what the
+figures in `runtime/gpu/vulkan/bc_decoder.cpp` are quoted from; the correctness
+of that decoder is `ctest`'s `bc`, not this.
 
 What `ctest` runs instead asserts, so it passes or fails on its own:
 
@@ -370,7 +374,7 @@ runner has none of it.
     cmake -S tests -B build-tests -G Ninja
     cmake --build build-tests && ctest --test-dir build-tests --output-on-failure
 
-Both entry points build the same three targets from `tests/CMakeLists.txt`
+Both entry points build the same five targets from `tests/CMakeLists.txt`
 ([.github/workflows/tests.yml](../.github/workflows/tests.yml), which runs them
 on every push and pull request).
 
@@ -380,6 +384,7 @@ on every push and pull request).
 | `log` (`tests/log_repeat_test.cpp`) | the rule that keeps a run readable: a line that repeats is written as it doubles with the count beside it, two lines differing only by an address are one kind, and a repetition in progress cannot flood ([switches.md](switches.md), `MW2_LOG_ALL`) |
 | `bc` (`tests/bc_decoder_test.cpp`) | the software block-compressed decoder (`bc_decoder.cpp`) against a reference written from the formats themselves, over random blocks and odd sizes: DXT1's three-colour mode, DXT3's four-bit alpha, DXT5's two alpha modes, BC5's two channels, levels, short payloads, impossible formats, and that decoding into a reused output buffer gives what a fresh one gave ([textures.md](textures.md#formats)) |
 | `volume` (`tests/texture_volume_test.cpp`) | where each level of a 3D texture lives in guest memory and that untiling one reads every level from its own place, against Xenia's `GetGuestTextureLayout` transcribed for the comparison — the depth term of a volume's level stride, which no desktop run could confirm ([textures.md](textures.md#layout-in-guest-memory)) |
+| `version` (`tests/version_test.cpp`) | the order release tags are compared in (`launcher/version.h`, `update::Look`): that a pre-release is older than its release, that `alpha.2` is older than `alpha.10`, that the project's own `v0.1.0-alpha.13` reads, and that what is not a version is refused rather than ordered — a tag the updater cannot read is a release no player is ever offered |
 
 None of them needs a disc, a game file or a GPU, which is the point — they run
 anywhere, including on a tree that cannot build the runtime. On Windows they are

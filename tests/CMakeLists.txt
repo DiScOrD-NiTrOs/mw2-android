@@ -85,6 +85,16 @@ add_executable(volume-test
 target_include_directories(volume-test PRIVATE "${MW2_RUNTIME}")
 add_test(NAME volume COMMAND volume-test)
 
+# ---- release tag order -----------------------------------------------------
+# launcher/version.h decides whether a release is newer than the running build
+# (launcher/update.cpp). A tag it cannot read means the launcher never offers
+# that release -- which is what happened to this project's own -alpha tags --
+# so the order and the refusals are checked here, with no network or launcher.
+add_executable(version-test
+    "${CMAKE_CURRENT_SOURCE_DIR}/version_test.cpp")
+target_include_directories(version-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../launcher")
+add_test(NAME version COMMAND version-test)
+
 if(WIN32)
     # The same rule the game is linked with: no C++ runtime beside the
     # executable. Without it a check that pulls in one more libstdc++ symbol
@@ -95,4 +105,5 @@ if(WIN32)
     target_link_options(log-test PRIVATE -static)
     target_link_options(bc-test PRIVATE -static)
     target_link_options(volume-test PRIVATE -static)
+    target_link_options(version-test PRIVATE -static)
 endif()

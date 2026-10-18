@@ -2,6 +2,63 @@
 
 All notable changes to the Modern Warfare 2 Android native recompilation project will be documented in this file.
 
+## [v0.0.2-alpha] - 2026-10-18
+
+### Highlights
+- **Release tags with a suffix are now read.** `v0.0.2-alpha` was a tag the
+  launcher's update check could not parse at all, so it answered "its
+  description is not one" and no player was ever offered it — as every
+  `v0.1.0-alpha.N` release before this one went unoffered.
+- The apk says which release it is, instead of "1.0".
+- Faster software decoding of block-compressed textures on Mali and Adreno
+  (BC2 10.1 → 4.7 ms per 2048x2048 decode).
+
+### Added
+- **`launcher/version.h`**: release tags compared as semantic versioning orders
+  them — `0.0.2-alpha < 0.0.2-beta < 0.0.2 < 0.0.3-alpha`, with `alpha.10` after
+  `alpha.9` and not before it, and a tag that is not a version refused rather
+  than ordered somewhere. `update::Look` uses it (`launcher/update.cpp`).
+- **`tests/version_test.cpp`** (`ctest` name `version`): the order above, the
+  project's own published tags, and the shapes that are not versions.
+- **`tools/bc_bench.cpp`**, built as `bc-bench`: how long one 2048x2048
+  software BC decode takes per format. The figures quoted in
+  `runtime/gpu/vulkan/bc_decoder.cpp` come from it.
+- **`MW2_VERSION_NAME`** (and `MW2_VERSION_CODE`) in `android/app/build.gradle.kts`:
+  the release the apk was built from, taken from the tag by `build-apk.yml`.
+
+### Changed
+- **BC decoder, row at a time** (`runtime/gpu/vulkan/bc_decoder.cpp`): BC2, BC3
+  and BC5 walked all sixteen pixels of a block with a computed x, y and shift;
+  they now take a row from a word already loaded, with the block's masked
+  colours and lifted alphas made once. On a 2048x2048 decode (best of 12,
+  `bc-bench`): BC2 10.1 → 4.7 ms, BC3 7.1 → 6.4 ms, BC5 6.7 → 6.4 ms, BC1
+  unchanged at 3.8 ms. The output is byte for byte what it was —
+  `tests/bc_decoder_test.cpp` compares it against a decoder written from the
+  formats themselves.
+- **`versionCode` 15 → 16**, so Android installs this over v0.0.2.
+- **`.github/workflows/release.yml`**: a tag that is not a version now fails the
+  run before anything is published — a release tag the launcher cannot read is
+  a release nobody is offered — and a tag with a suffix after its version is
+  drafted as a pre-release, which is what keeps GitHub's "latest release" (the
+  one the launcher asks for) on a version everyone can install.
+- **`docs/building.md`**: the list of harnesses and `ctest`'s checks, which said
+  three targets where there were four and now are five.
+
+### Fixed
+- **A build with no release tag no longer compares itself against the newest
+  release.** The empty version parsed as no numbers, which every version sorts
+  above, so an unreleased build was offered an update it should not have been
+  (`update.h` says such a build does not update; now it does not).
+
+### Notes
+- GitHub's "latest release" — the endpoint the launcher reads — is never a
+  pre-release, so publishing `v0.0.2-alpha` as a pre-release reaches players
+  through the releases page and the apk, not through the in-launcher updater.
+  That is the intended behaviour for an alpha; a pre-release build being
+  *offered* pre-releases would need the list endpoint instead.
+
+---
+
 ## [v0.0.2] - 2026-10-13
 
 ### Highlights

@@ -230,7 +230,14 @@ jobs:
           esac
           export MW2_BUILD_SHA="${MW2_BUILD_SHA::7}"
           export MW2_BUILD_STAMP="$(date -u '+%Y-%m-%d %H:%M') UTC, run ${{ github.run_number }}"
-          echo "building $task ($MW2_BUILD_SHA)"
+          # The apk says which release it is. The tag is the one being built --
+          # a release publishes these, or the dispatch input names it -- and
+          # without one the file's own default stands.
+          tag="${{ github.event.release.tag_name || github.event.inputs.release_tag }}"
+          if [ -n "$tag" ]; then
+            export MW2_VERSION_NAME="${tag#v}"
+          fi
+          echo "building $task ($MW2_BUILD_SHA, ${MW2_VERSION_NAME:-file default})"
           gradle "$task" --no-daemon --stacktrace
           ccache --show-stats || true
 

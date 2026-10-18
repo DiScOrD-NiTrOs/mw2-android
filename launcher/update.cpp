@@ -1,6 +1,7 @@
 #include "update.h"
 #include "disc.h"
 #include "download.h"
+#include "version.h"
 #include "../runtime/install/crypto.h"
 #include "../runtime/install/spawn.h"
 
@@ -63,22 +64,6 @@ namespace
             return end == std::string::npos ? "" : json.substr(at + 1, end - at - 1);
         }
         return json.substr(at, json.find_first_of(",}\r\n ", at) - at);
-    }
-
-    // "v1.2.3" as numbers; a tag that is not one compares as older than any.
-    std::vector<int> Numbers(const std::string& tag)
-    {
-        std::vector<int> numbers;
-        size_t at = !tag.empty() && tag[0] == 'v' ? 1 : 0;
-        while (at < tag.size())
-        {
-            if (tag[at] < '0' || tag[at] > '9') return {};
-            int number = 0;
-            for (; at < tag.size() && tag[at] >= '0' && tag[at] <= '9'; at++) number = number * 10 + (tag[at] - '0');
-            numbers.push_back(number);
-            if (at < tag.size() && tag[at++] != '.') return {};
-        }
-        return numbers;
     }
 
     bool Sha256Of(const fs::path& path, std::string& hex)
@@ -152,9 +137,18 @@ update::Check update::Look(Release& release, std::string& error)
         release.url = Value(json, "browser_download_url", at);
         break;
     }
-    const std::vector<int> newest = Numbers(release.version);
-    if (newest.empty()) { error = "The newest version could not be looked up: its description is not one."; return Check::Failed; }
-    if (newest <= Numbers(Current())) return Check::UpToDate;
+    // A tag is compared as semantic versioning orders them, pre-releases
+    // included: v0.0.2-alpha is a pre-release of 0.0.2, and older than it.
+    const version::Tag newest = version::Parse(release.version);
+    if (!newest.valid)
+    {
+        error = "The newest version could not be looked up: its description is not one.";
+        return Check::Failed;
+    }
+    const version::Tag current = version::Parse(Current());
+    // A build nobody released has no version to compare, and does not update.
+    if (!current.valid) return Check::UpToDate;
+    if (!version::Newer(newest, current)) return Check::UpToDate;
     if (release.archive.empty() || release.sha256.empty() || release.url.empty())
     {
         error = "Version " + release.version + " is out, without a build for this system. Look on\n" + std::string(kPage);

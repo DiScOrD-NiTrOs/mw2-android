@@ -406,6 +406,20 @@ if(Vulkan_FOUND)
     target_compile_definitions(upload-texture PRIVATE MW2_HAVE_VULKAN=1)
 endif()
 
+# ---- the software decoder's speed ------------------------------------------
+# Not a check: a number. The decoder runs on every texture uploaded where the
+# driver cannot sample block compression, so the loops in it are worth timing
+# the way the comments there quote -- a 2048x2048 decode, per format, with the
+# output buffer reused as the runtime reuses its scratch.
+add_executable(bc-bench
+    "${CMAKE_SOURCE_DIR}/tools/bc_bench.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/bc_decoder.cpp")
+target_include_directories(bc-bench PRIVATE "${CMAKE_SOURCE_DIR}/runtime")
+if(Vulkan_FOUND)
+    target_link_libraries(bc-bench PRIVATE Vulkan::Vulkan)
+    target_compile_definitions(bc-bench PRIVATE MW2_HAVE_VULKAN=1)
+endif()
+
 # ---- the checks `ctest` runs -----------------------------------------------
 # The three of them are defined in a project of their own (tests/CMakeLists.txt)
 # so they can be configured and run on a tree that cannot build the runtime: this
