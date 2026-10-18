@@ -89,14 +89,16 @@ namespace
     // "MW2PROF1", a count, then id / source / length / bytes for each setting.
     constexpr char kMagic[8] = { 'M','W','2','P','R','O','F','1' };
 
-    std::map<uint32_t, Setting>& LoadLocked(Profile& profile)
-    {
-        auto& settings = profile.settings;
-        if (profile.read) return settings;
-        profile.read = true;
+    void SaveLocked(const Profile& profile);
 
-        std::FILE* f = std::fopen(profile.file.string().c_str(), "rb");
-        if (!f) return settings;
+    // One profile file into `settings`. False when it is absent or does not
+    // parse, with `settings` left empty either way, so a caller can try the
+    // next candidate without having to undo anything.
+    bool ReadProfileFile(const fs::path& path, std::map<uint32_t, Setting>& settings)
+    {
+        settings.clear();
+        std::FILE* f = std::fopen(path.string().c_str(), "rb");
+        if (!f) return false;
 
         char magic[8] = {};
         uint32_t count = 0;
@@ -117,34 +119,82 @@ namespace
         }
         std::fclose(f);
 
-        if (!ok) { settings.clear(); LOGE("profile: %s is not readable, starting fresh",
-                                           profile.file.string().c_str()); }
-        else LOGK("profile: %zu settings read from %s", settings.size(),
-                  profile.file.string().c_str());
+        if (!ok) settings.clear();
+        return ok;
+    }
+
+    std::map<uint32_t, Setting>& LoadLocked(Profile& profile)
+    {
+        auto& settings = profile.settings;
+        if (profile.read) return settings;
+        profile.read = true;
+
+        if (ReadProfileFile(profile.file, settings))
+        {
+            LOGK("profile: %zu settings read from %s", settings.size(),
+                 profile.file.string().c_str());
+            return settings;
+        }
+
+        // Nothing there at all is an ordinary first boot, not a loss, and says
+        // nothing worth logging as an error.
+        std::error_code ec;
+        const bool present = fs::exists(profile.file, ec);
+
+        // The copy WriteFileAtomically moved aside. Reaching it means the save
+        // that was replacing it did not finish, so it holds the newest whole
+        // profile there is -- which is worth far more than starting the player
+        // over on a fresh one.
+        fs::path backup = profile.file;
+        backup += ".bak";
+        if (ReadProfileFile(backup, settings))
+        {
+            LOGE("profile: %s is unreadable; recovered %zu settings from %s",
+                 profile.file.string().c_str(), settings.size(), backup.string().c_str());
+            // Put them back under the real name straight away, so the next save
+            // moves something whole aside rather than the file that just failed
+            // to parse.
+            SaveLocked(profile);
+            return settings;
+        }
+
+        if (present)
+            LOGE("profile: neither %s nor its backup is readable, starting fresh",
+                 profile.file.string().c_str());
         return settings;
     }
 
     void SaveLocked(const Profile& profile)
     {
         const auto& settings = profile.settings;
-        std::error_code ec;
-        fs::create_directories(SaveRoot(), ec);
-        std::FILE* f = std::fopen(profile.file.string().c_str(), "wb");
-        if (!f) { LOGE("profile: cannot write %s", profile.file.string().c_str()); return; }
+
+        // Serialised whole and handed over in one piece. The file is replaced
+        // rather than rewritten in place, so there is no instant at which the
+        // profile on disk is half of this one: a kill mid-save used to leave a
+        // truncated file, which the reader cannot tell from "not a profile" and
+        // answered with a fresh one -- every setting and the player's rank gone.
+        std::vector<uint8_t> out;
+        auto put = [&out](const void* bytes, size_t size)
+        {
+            const auto* p = static_cast<const uint8_t*>(bytes);
+            out.insert(out.end(), p, p + size);
+        };
 
         const uint32_t count = uint32_t(settings.size());
-        std::fwrite(kMagic, 1, 8, f);
-        std::fwrite(&count, 4, 1, f);
+        put(kMagic, 8);
+        put(&count, 4);
         for (auto& [id, setting] : settings)
         {
             const uint32_t key = id, source = setting.source;
             const uint32_t length = uint32_t(setting.bytes.size());
-            std::fwrite(&key, 4, 1, f);
-            std::fwrite(&source, 4, 1, f);
-            std::fwrite(&length, 4, 1, f);
-            if (length) std::fwrite(setting.bytes.data(), 1, length, f);
+            put(&key, 4);
+            put(&source, 4);
+            put(&length, 4);
+            if (length) put(setting.bytes.data(), length);
         }
-        std::fclose(f);
+
+        if (!WriteFileAtomically(profile.file, out.data(), out.size()))
+            LOGE("profile: cannot write %s", profile.file.string().c_str());
     }
 }
 

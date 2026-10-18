@@ -387,6 +387,10 @@ class GameActivity : AppCompatActivity(), NativeListener {
             return
         }
         started = true
+        // The run is up, so ask the system to treat its process as one still
+        // wanted: stepping out to a message then costs a pause, not the whole
+        // load again (GameService.kt).
+        GameService.start(this)
         Trail.clear(this)
         pads.setEnabled(prefs.gamepadEnabled)
         pads.refreshDevices()
@@ -1030,6 +1034,7 @@ class GameActivity : AppCompatActivity(), NativeListener {
         NativeBridge.listener = null
         if (started && !isChangingConfigurations) {
             // The activity is going for good: the run goes with it.
+            GameService.stop(this)
             NativeBridge.nativeRequestStop()
             Process.killProcess(Process.myPid())
         }

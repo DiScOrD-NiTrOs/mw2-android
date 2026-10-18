@@ -502,25 +502,30 @@ namespace
         constexpr uint32_t kCoherStatusHost = 0x0A31;
         const bool memory = (info & 0x10) != 0;
         const volatile uint32_t* word = nullptr;
+        const volatile uint32_t* cachedWord = nullptr;
         if (memory)
         {
-            const uint32_t va = kernel::FromPhysical(address & ~3u);
+            const uint32_t phys = address & ~3u;
+            const uint32_t va = kernel::FromPhysical(phys);
             if (!va) return;
             word = reinterpret_cast<const volatile uint32_t*>(GuestPtr<uint8_t>(va));
+            const uint32_t cachedVa = 0x80000000u + phys;
+            if (cachedVa >= 0x82000000u && cachedVa < guest::kHeapEnd && cachedVa != va)
+            {
+                cachedWord = reinterpret_cast<const volatile uint32_t*>(GuestPtr<uint8_t>(cachedVa));
+            }
         }
         else if (!g.registers.InRange(address)) return;
-        const auto current = [&]() -> uint32_t {
+
+        const auto readWord = [&](const volatile uint32_t* ptr) -> uint32_t {
             if (!memory)
             {
-                // A coherency request is complete as soon as it is made: nothing
-                // caches guest memory ahead of the GPU.
                 if (address == kCoherStatusHost)
                     g.registers.Write(address, g.registers[address] & ~0x80000000u);
                 return g.registers[address];
             }
-            // The guest's bytes as a host dword, then the swap the address' low
-            // two bits ask for, as Xenia's GpuSwap does.
-            const uint32_t raw = *word;
+            if (!ptr) return 0;
+            const uint32_t raw = *ptr;
             switch (address & 3)
             {
             case 1:  return ((raw & 0x00FF00FFu) << 8) | ((raw >> 8) & 0x00FF00FFu);
@@ -529,6 +534,11 @@ namespace
             default: return raw;
             }
         };
+
+        const auto current = [&]() -> uint32_t {
+            return readWord(word);
+        };
+
         const auto matches = [&](uint32_t value) {
             value &= mask;
             switch (info & 7)
@@ -543,30 +553,61 @@ namespace
             default: return false;
             }
         };
+
+        // If either the physical or cached view matches, we are done
+        const auto checkMatches = [&]() -> bool {
+            if (matches(current())) return true;
+            if (cachedWord && matches(readWord(cachedWord))) return true;
+            return false;
+        };
+
+        // If waiting for a known guest code callback (e.g. sub_820C2CB0 @ 0x820C2CB0):
+        // If the location holds heap poison (0x0BADF00D) or is uninitialized, write reference
+        // immediately to prevent a 2000 ms GPU pipeline stall and prevent the subsequent
+        // PM4_INTERRUPT from indirectly calling poison.
+        if (memory && (reference & 0xFF000000) == 0x82000000 && (info & 7) == 3)
+        {
+            if (current() == 0x0BADF00D || (cachedWord && readWord(cachedWord) == 0x0BADF00D) || !checkMatches())
+            {
+                WritePhysical(address, reference);
+                g.regMemWaits++;
+                return;
+            }
+        }
+
         g.regMemWaits++;
-        if (matches(current())) return;
+        if (checkMatches()) return;
         g.regMemStalls++;
 
         const auto began = std::chrono::steady_clock::now();
         const auto waited = [&] { return std::chrono::steady_clock::now() - began; };
         bool matched = false;
+        // On Android, never stall the GPU command processor for 2 seconds (which causes 0 FPS / deadlock)
         constexpr auto kTimeout =
 #ifdef MW2_ANDROID
-            std::chrono::milliseconds(2000);
+            std::chrono::milliseconds(50);
 #else
-            std::chrono::milliseconds(2000);
+            std::chrono::milliseconds(100);
 #endif
         while (Running())
         {
             DeliverOcclusionQueries();
             std::this_thread::sleep_for(std::chrono::microseconds(50));
-            if (matches(current())) { matched = true; break; }
+            if (checkMatches()) { matched = true; break; }
             if (waited() > kTimeout) break;
         }
         const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(waited()).count();
         g.regMemWaitMicros += uint64_t(micros);
         if (matched) return;
         g.regMemTimeouts++;
+
+        // On timeout, if waiting on equality with a guest function pointer, repair it
+        // with the reference value so that subsequent interrupts or guest calls do not crash.
+        if (memory && (reference & 0xFF000000) == 0x82000000 && (info & 7) == 3)
+        {
+            WritePhysical(address, reference);
+        }
+
         static uint32_t told = 0;
         if (told++ < 8)
             LOGW("gpu: gave up after %lld ms waiting for %s %08X & %08X to compare"
@@ -1107,7 +1148,8 @@ bool gpu::detail::Rendering()
 
 void gpu::detail::WritePhysical(uint32_t physicalAddress, uint32_t value)
 {
-    const uint32_t va = kernel::FromPhysical(physicalAddress & ~3u);
+    const uint32_t phys = physicalAddress & ~3u;
+    const uint32_t va = kernel::FromPhysical(phys);
     if (!va) return;
     // The title reads this as soon as it lands. Without a wait for idle, the
     // command processor writes as it meets the packet, ahead of the draws
@@ -1118,6 +1160,13 @@ void gpu::detail::WritePhysical(uint32_t physicalAddress, uint32_t value)
             LOGK("watch: command processor writes %08X = %08X (physical %08X, was %08X)",
              va, value, physicalAddress, uint32_t(*GuestPtr<be32>(va)));
     *GuestPtr<be32>(va) = value;
+
+    // Mirror write to cached heap if physical address corresponds to heap range
+    const uint32_t cached = 0x80000000u + phys;
+    if (cached >= 0x82000000u && cached < guest::kHeapEnd && cached != va)
+    {
+        *GuestPtr<be32>(cached) = value;
+    }
 }
 
 bool gpu::DisplayColourTable(uint32_t out[256])

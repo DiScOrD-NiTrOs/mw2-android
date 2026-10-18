@@ -872,6 +872,15 @@ void kernel::MovePlayerData(uint64_t from, uint64_t to)
         if (!ec) fs::rename(saves / is / was, saves / is / is, ec);
         LOGI("xam: the rank kept as %s is now %s%s", was.c_str(), is.c_str(), ec ? " -- not moved" : "");
     }
+    // The package a replaced save was rotated aside into (content.cpp,
+    // RotatePackage) follows its own number, for the reason given below.
+    std::error_code rankEc;
+    const fs::path rankWas = saves / (was + ".bak"), rankIs = saves / (is + ".bak");
+    if (fs::exists(rankWas, rankEc))
+    {
+        fs::remove_all(rankIs, rankEc);
+        fs::rename(rankWas, rankIs, rankEc);
+    }
     const fs::path users = saves / "online" / "user";
     const fs::path liveWas = users / XuidText(OnlineXuid(from)), liveIs = users / XuidText(OnlineXuid(to));
     if (fs::is_directory(liveWas, ec) && !fs::exists(liveIs, ec)) fs::rename(liveWas, liveIs, ec);
@@ -880,7 +889,20 @@ void kernel::MovePlayerData(uint64_t from, uint64_t to)
     std::snprintf(settingsWas, sizeof settingsWas, "profile_%012llx.bin", (unsigned long long)from);
     std::snprintf(settingsIs, sizeof settingsIs, "profile_%012llx.bin", (unsigned long long)to);
     if (fs::exists(saves / settingsWas, ec) && !fs::exists(saves / settingsIs, ec))
+    {
         fs::rename(saves / settingsWas, saves / settingsIs, ec);
+        // The copy an interrupted save left behind goes with it. Left under the
+        // old name it is both clutter and a trap: a profile later given this
+        // same number would find it and recover a stranger's settings out of it.
+        std::error_code backupEc;
+        const fs::path backupWas = saves / (std::string(settingsWas) + ".bak");
+        const fs::path backupIs  = saves / (std::string(settingsIs)  + ".bak");
+        if (fs::exists(backupWas, backupEc))
+        {
+            fs::remove(backupIs, backupEc);
+            fs::rename(backupWas, backupIs, backupEc);
+        }
+    }
 }
 
 void kernel::AcceptInvite(uint64_t inviterAccount, const uint8_t* session60, bool fromInvite)

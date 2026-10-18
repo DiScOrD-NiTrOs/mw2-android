@@ -29,6 +29,7 @@ them as unset whatever the environment says, and also drops the keys `F5`, `F7`,
 | `MW2_LOG_FILE=<path>` | R | writes the log there, creating its folder. The log goes to stderr, so `> file` does not catch it. A title started from the other one's menus writes on in the same file |
 | `MW2_REPORT=1` | R | what a bug report needs, as the launcher's REPORT A BUG sets it: the log names the graphics driver and ends with the run's frame rate, frame time spread and what was compiled at a draw ([building.md](building.md)) |
 | `MW2_LOG_TIME=1` | | stamps every log line with the time since start |
+| `MW2_LOG_ALL=1` | | writes every line as it comes. Without it a line that repeats is written once and then counted -- the 1st, 2nd, 4th, 8th ... with the size of the repetition beside it, which is never above the truth and within a factor of two of it -- and two lines that differ only in an address, a size or a shader hash are one kind of line. A run that logs one thing a thousand times buries the line that says what it was |
 | `MW2_CONSOLE="30:map af_caves;45:god"` | R | queues commands into the title's console command buffer at the given wall-clock seconds; see [gameplay.md](gameplay.md) |
 | `MW2_NET_LINK=0\|1` | R | whether the Ethernet link is reported up. Default down for the campaign, up for the multiplayer, which starts no match without one |
 | `MW2_NO_AUTO_SAVE_DEVICE=1` | R | leaves the save-device choice to the title's prompt instead of choosing the hard disk ([saves.md](saves.md)) |
@@ -116,7 +117,10 @@ walking to it.
 | `MW2_RENDER=0` | | executes and counts the stream but draws nothing |
 | `MW2_ONLY_SHADER=<hex>[,...]`, `MW2_SKIP_SHADER=<hex>[,...]` | | draws only, or all but, the draws using those shaders |
 | `MW2_NO_CULL=1`, `MW2_NO_DEPTH_TEST=1` | | take culling or the depth test out of every pipeline |
-| `MW2_NO_SHADOW=1` | | no shadow of guest memory: every draw copies its vertex data into the arena |
+| `MW2_NO_SHADOW=1` | | no shadow of guest memory: every draw copies its vertex data into the arena. It is 512 MB behind the arena, so Android sets it itself on a device of six gigabytes or less ([android.md](android.md)) |
+| `MW2_ADRENO_BC=hw\|dxt1` | | how much of the Snapdragon workaround applies when the driver's own BC sampling is on: `hw` keeps it entirely, `dxt1` keeps it and decodes only the BC1 family in software. Unset is every BC format in software, which is the default on Adreno ([textures.md](textures.md)) |
+| `MW2_FORCE_BC_HW=1` | | on an Adreno device: leave BC sampling to the driver rather than the software decoder |
+| `MW2_FORCE_BC_DECOMPRESS=1` | | decode every BC texture in software on any device, which is how a desktop driver is made to exercise the decoder the Snapdragon path uses |
 | `MW2_RECORD_THREAD=0` | | makes the Vulkan calls on the ring consumer instead of the recorder thread |
 | `MW2_TIME_RENDER=1` | | where the ring consumer's time goes, and how long it waits on the GPU |
 | `MW2_TRACE_PACING=<file>` | | a timeline written at exit: the consumer's batches and swaps, the title's presents, and every guest thread's engine waits, kernel waits and sleeps with their callers ([multiplayer.md](multiplayer.md)) |

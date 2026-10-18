@@ -8,6 +8,7 @@
 #ifdef MW2_ANDROID
 
 #include "android.h"
+#include "../log.h"
 
 #include <android/log.h>
 
@@ -185,13 +186,18 @@ namespace mw2log
 {
     void AndroidWrite(char level, const char* format, ...)
     {
-        char text[1024];
         va_list arguments;
         va_start(arguments, format);
-        const int written = std::vsnprintf(text, sizeof text, format, arguments);
+        const std::string& line = Line(level, format, arguments);
         va_end(arguments);
-        if (written < 0) return;
-        android::LogLine(level, text);
+
+        // Counted here against the same rule as the desktop build (log.h,
+        // Repeat), because this is the log the app's own screen shows and the
+        // player shares: a phone is where a line that repeats four hundred
+        // times costs the most to read.
+        const char* suffix = Repeat(line);
+        if (!suffix) return;
+        android::LogLine(level, (line + suffix).c_str());
     }
 }
 

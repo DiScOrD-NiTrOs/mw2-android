@@ -17,6 +17,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- The run's process has to stay wanted while the game is up, and for a
+         process nobody is looking at a foreground service is the only way to
+         say so (GameService.kt). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <uses-feature android:name="android.hardware.vulkan.version"
         android:version="0x400000" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -65,6 +71,21 @@
             android:preferMinimalPostProcessing="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|navigation|keyboard|touchscreen|smallestScreenSize"
             tools:ignore="DiscouragedApi,LockedOrientationActivity" />
+
+        <!-- In the run's own process, so the notification and the game share
+             one: a service in the launcher's process would keep the wrong thing
+             alive and let the :game process be killed anyway. Its type is
+             "special use" because that is what a game session held open for a
+             player who has stepped away is. -->
+        <service
+            android:name=".GameService"
+            android:exported="false"
+            android:process=":game"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="A game session in progress" />
+        </service>
 
         <activity
             android:name=".SettingsActivity"

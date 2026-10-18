@@ -89,6 +89,26 @@ namespace
 
         uint32_t HighWater() const { return top.load(std::memory_order_acquire); }
 
+        // Whether something live in this arena covers `va`. FromPhysical needs
+        // this to tell two arenas apart that answer to the same physical
+        // address, and it is asked from the command processor for every packet
+        // naming one -- so it does not wait: Alloc zeroes a reused block with
+        // the lock held, and blocking the GPU thread behind that would trade one
+        // stall for another. A lock it cannot take answers Unknown, and the
+        // caller keeps the answer it would have given before.
+        enum class Coverage { No, Yes, Unknown };
+
+        Coverage Covers(uint32_t va)
+        {
+            std::unique_lock held(lock, std::try_to_lock);
+            if (!held) return Coverage::Unknown;
+            auto it = live.upper_bound(va);
+            if (it == live.begin()) return Coverage::No;
+            --it;
+            return uint64_t(va) < uint64_t(it->first) + it->second ? Coverage::Yes
+                                                                  : Coverage::No;
+        }
+
         void Report()
         {
             std::lock_guard held(lock);
@@ -103,6 +123,11 @@ namespace
 
     Heap g_heap{ "virtual", guest::kHeapBase, guest::kHeapEnd };
     Heap g_phys{ "physical", guest::kPhysicalBase, guest::kPhysicalEnd };
+
+    // How often FromPhysical resolved an address to the general heap that the
+    // high water mark alone would have sent to the physical arena. Every one of
+    // these was a word the command processor and the title disagreed about.
+    diag::Stat g_physicalCorrected;
 
     struct TlsTemplate { uint32_t address = 0, size = 0; };
     TlsTemplate g_tlsTemplate;
@@ -164,6 +189,10 @@ void kernel::ReportMemory()
     if constexpr (!diag::kOn) return;
     g_heap.Report();
     g_phys.Report();
+    if (g_physicalCorrected)
+        LOGI("memory: %llu physical addresses resolved to the virtual heap that the high"
+             " water mark alone would have sent to the physical arena",
+             (unsigned long long)g_physicalCorrected.load());
 }
 
 namespace
@@ -258,13 +287,52 @@ uint32_t kernel::ToPhysical(uint32_t va)
 
 uint32_t kernel::FromPhysical(uint32_t phys)
 {
-    // Ambiguous in principle -- on hardware 0x8xxxxxxx and 0xAxxxxxxx are two
-    // views of the same RAM, while here they are separate arenas. Everything the
-    // GPU is handed comes from the physical arena, so try that first.
-    uint32_t arena = guest::kPhysicalBase + phys;
-    if (phys < (g_phys.HighWater() - guest::kPhysicalBase)) return arena;
-    uint32_t cached = 0x80000000u + phys;
-    if (cached >= 0x82000000u && cached < guest::kHeapEnd) return cached;
+    // Both arenas answer to the same physical address. The title reduces a
+    // virtual address to a physical one by masking off the top three bits, so
+    // the general heap at 0x84600000 and the physical arena at 0xA4600000 both
+    // come out as 0x04600000. On hardware those are two windows onto one bank;
+    // here they are separate memory, so the window meant has to be identified
+    // and not guessed.
+    //
+    // Asking each arena whether it has anything live at that offset is exact.
+    // What stood here before -- "is it below the physical arena's high water
+    // mark" -- is a ceiling that only rises, so as soon as the title had
+    // allocated past a heap address' offset (about 70 MB in, which it reaches
+    // almost immediately) every heap address resolved to the physical arena
+    // instead. The command processor then wrote one window while the title
+    // polled the other, and a WAIT_REG_MEM on that word could never be
+    // satisfied -- the 2000 ms stalls, and the frame rate pinned to whatever
+    // the timeout was set to.
+    const uint32_t arena  = guest::kPhysicalBase + phys;
+    const uint32_t cached = 0x80000000u + phys;
+    const bool mightBeArena  = arena >= guest::kPhysicalBase && arena < guest::kPhysicalEnd;
+    const bool mightBeCached = cached >= 0x82000000u && cached < guest::kHeapEnd;
+
+    // The image's own data and the function lookup table below the heap are not
+    // allocated through either arena, so no allocation covers them and there is
+    // nothing to tell apart.
+    if (mightBeCached && cached < guest::kHeapBase) return cached;
+
+    using Coverage = Heap::Coverage;
+    const Coverage inArena  = mightBeArena  ? g_phys.Covers(arena)  : Coverage::No;
+    const Coverage inCached = mightBeCached ? g_heap.Covers(cached) : Coverage::No;
+
+    // Where both hold something at that offset the address is genuinely
+    // ambiguous, and the physical arena is what the GPU is handed.
+    if (inArena == Coverage::Yes) return arena;
+    if (inCached == Coverage::Yes)
+    {
+        // Worth counting: this is the case that used to come out wrong.
+        if (mightBeArena && phys < (g_phys.HighWater() - guest::kPhysicalBase))
+            g_physicalCorrected++;
+        return cached;
+    }
+
+    // Nothing live either side, or a lock that could not be taken: the answer
+    // this gave before. An address can be named before the title allocates it,
+    // so it is better to answer than to refuse.
+    if (mightBeArena && phys < (g_phys.HighWater() - guest::kPhysicalBase)) return arena;
+    if (mightBeCached) return cached;
     return 0;
 }
 

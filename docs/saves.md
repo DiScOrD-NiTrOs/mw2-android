@@ -34,12 +34,24 @@ layer's device table. The save is `saves/savegame.svg/savegame.svg`.
 | `XamContentGetDeviceData` | one hard disk, 16 GB with 8 GB free: the title compares the free space with what it is about to write and refuses to save if it does not fit |
 | `XamContentCreateEx` | honours the disposition (create new, create always, open existing, open always, truncate), reports whether the package was new or existing, and mounts it |
 | `XamContentClose` | unmounts |
-| `XamContentDelete` | removes the directory |
+| `XamContentDelete` | removes the directory, and the `.bak` beside it |
 
 **Create-always and truncate empty the package first.** That is what the
 disposition means, and the title relies on it: it then creates its file with
 `CREATE_NEW`, so a file left from the previous save would collide and the save
 would fail.
+
+The package is not emptied in place, though. It is renamed to `<name>.bak` and
+a fresh one made, so the previous save still exists whole while the title is
+part-way through writing the new one — a kill between the two used to leave the
+player with neither (see [Surviving an interrupted
+write](#surviving-an-interrupted-write)). Only one generation is kept: the next
+save replaces it. Nothing reads it back automatically, because the file inside
+is MW2's own format and this runtime cannot tell a good one from a truncated
+one; recovering it means renaming the directory by hand. `XamContentDelete`
+removes it too, so deleting a save does not leave the old one behind, and
+`kernel::MovePlayerData` carries it along when a package is renamed to another
+player's number.
 
 Package names are sanitised to letters, digits, `_`, `-` and `.`, since they
 become host paths.
@@ -107,6 +119,46 @@ their buffer with a first call.
 `profile.bin` is `MW2PROF1`, a count, then id, source, length and bytes for each
 setting, in host byte order for the header fields and the guest's byte order
 for the values.
+
+A profile that cannot be parsed is **not** treated as an empty one. An empty
+profile makes the title run its first boot again and lose every setting, so a
+read that fails falls back to `profile.bin.bak` and, if that parses, writes it
+back under the real name. Only when neither is readable does it start fresh, and
+it says so in the log.
+
+## Surviving an interrupted write
+
+Nothing here can count on reaching its next line. Android's low memory killer
+takes the process away by design, a lost Vulkan device exits it outright
+(`gpu/vulkan/renderer.cpp`, `OnDeviceLost`), and the manifest sets
+`allowBackup="false"`, so a save that goes is gone. Everything this runtime
+writes is small, written rarely and irreplaceable, which makes the trade an easy
+one: pay a sync on every save rather than lose one.
+
+`kernel::WriteFileAtomically` (`kernel/durable.h`) is what the profile goes
+through, and it does two things stdio does not:
+
+* **It never opens the target for truncation.** The bytes go to `<path>.tmp`,
+  which is renamed over the target once it is whole. `rename` is atomic, so at
+  every instant one name or the other holds a complete file; the previous
+  contents move to `<path>.bak` rather than being overwritten.
+* **It waits for storage.** `fflush` only moves bytes from the process's buffer
+  into the kernel's page cache, which is written back whenever the kernel
+  chooses — a reset in between loses them. `kernel::SyncStream` follows the
+  flush with `fsync` (`_commit` on Windows), and on POSIX the directory is
+  synced too, since a rename is only as durable as the directory entry it made.
+
+The same sync runs for the title's own writes: `NtFlushBuffersFile` is a real
+`fsync` rather than a flush, and closing a writable file inside a mounted
+package syncs it. That is paid on saves and nothing else, because the disc is
+read-only and a write anywhere outside a package is discarded before it reaches
+a handle.
+
+`tests/durable_test.cpp` asserts these properties — that a replacement leaves
+the previous contents whole, that a successful write leaves no `.tmp`, that one
+left by a dead run is not mistaken for the target, and that sizes round-trip
+across block boundaries. It depends on neither the guest nor the recompiled
+image, so `ctest` runs it on a tree with no disc, no game files and no GPU.
 
 ## Driving the first boot headlessly
 

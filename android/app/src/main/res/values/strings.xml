@@ -37,6 +37,15 @@
     <string name="last_crash">The app stopped last time</string>
     <string name="log_empty">Nothing logged yet.</string>
 
+    <!-- the log screen is a summary; the log itself is a button away -->
+    <string name="log_none">No errors or warnings in this run.</string>
+    <string name="log_counts">%1$d errors, %2$d warnings</string>
+    <string name="log_where">Where it got to:</string>
+    <string name="log_stopped">The last run stopped:</string>
+    <string name="log_more">and %1$d more, counted but not shown</string>
+    <string name="log_everything">The whole log</string>
+    <string name="log_share_note">Sharing sends the whole log, not this summary.</string>
+
     <!-- bringing a file in through the system picker -->
     <string name="pick_with_files">Choose with the Files app</string>
     <string name="import_file">Import</string>
@@ -113,6 +122,11 @@
     <string name="error_not_installed">The game files are not installed. Install them from the launcher first.</string>
     <string name="error_start">The runtime would not start. The log has the details.</string>
     <string name="stats_line">%1$.0f fps   %2$d MB textures   %3$d×%4$d</string>
+
+    <!-- the run's own notification, which is there so the process is not the
+         first thing the system reclaims (GameService.kt) -->
+    <string name="run_channel">A game is running</string>
+    <string name="run_working">Running. Leaving the app does not end the game.</string>
 
     <!-- editing the pad -->
     <string name="edit_pick_one">Touch a control to pick it up. Drag to move it, pinch to resize.</string>

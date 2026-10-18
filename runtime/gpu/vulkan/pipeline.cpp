@@ -1,5 +1,6 @@
 #include "pipeline.h"
 #include "bindings.h"
+#include "bc_decoder.h"
 #include "../../env.h"
 #include "../../log.h"
 #include "../../report.h"
@@ -190,13 +191,22 @@ bool vk::pipeline::CreateDevice(void* physicalDevice, uint32_t family,
     // devices to the software BC decoder, whose results are correct on both.
     // MW2_FORCE_BC_HW=1 puts it back when a driver proves clean.
     // The env flag is also available to users who hit this on another GPU vendor.
+    const vk::bc::AdrenoBC adrenoBc = vk::bc::AdrenoMode();
     if (physicalProperties.vendorID == 0x5143 && supported.textureCompressionBC &&
-        !env::Flag("MW2_FORCE_BC_HW"))
+        !env::Flag("MW2_FORCE_BC_HW") && adrenoBc == vk::bc::AdrenoBC::kAll)
     {
         enabled.textureCompressionBC = VK_FALSE;
         g.textureCompressionBC = false;
         LOGW("vulkan: Adreno BC sampling disabled (known black/missing-geometry flicker);"
-             " textures decode in software -- MW2_FORCE_BC_HW=1 re-enables hardware BC");
+             " textures decode in software -- MW2_FORCE_BC_HW=1 re-enables hardware BC,"
+             " MW2_ADRENO_BC=dxt1 keeps it for everything but the BC1 family");
+    }
+    else if (physicalProperties.vendorID == 0x5143 && supported.textureCompressionBC &&
+             adrenoBc != vk::bc::AdrenoBC::kAll)
+    {
+        LOGW("vulkan: MW2_ADRENO_BC=%s: the driver's BC sampling is on"
+             " (was off as the Adreno workaround); the BC1 family still decodes in software",
+             adrenoBc == vk::bc::AdrenoBC::kHardware ? "hw" : "dxt1");
     }
     if (!supported.textureCompressionBC)
         LOGW("vulkan: the device does not report textureCompressionBC support");

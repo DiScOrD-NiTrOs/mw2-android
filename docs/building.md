@@ -353,6 +353,23 @@ It packages `mw2-launcher` with them, and the fonts' licence.
 | `rd_thumbs.sh` | the picture from every `.rdc` as a PNG, plus a contact sheet |
 | `flash_hunt.sh`, `flash_hunt_report.py`, `flash_draws.py` | the flash hunt: mark flashes in play, then compare the marked frame's draws with its neighbours' |
 
+### Tests
+
+`translate-shader` and `upload-texture` above are harnesses to be read: they run
+a stage without the game and print what it did, and a person decides whether it
+looks right.
+
+What `ctest` runs instead asserts, so it passes or fails on its own:
+
+    cmake --build build && ctest --test-dir build --output-on-failure
+
+| test | what |
+|---|---|
+| `durable` (`tests/durable_test.cpp`) | that a save survives losing the process part-way: a replacement leaves the previous contents whole, a successful write leaves no `.tmp`, one left by a dead run is not mistaken for the target, and sizes round-trip across block boundaries ([saves.md](saves.md#surviving-an-interrupted-write)) |
+
+It needs no disc, no game files and no GPU, which is the point — it is the one
+check that runs anywhere, including on a tree that cannot build the runtime.
+
 ### Docs
 
 | file | what |

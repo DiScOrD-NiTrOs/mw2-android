@@ -80,6 +80,28 @@ namespace
         return on;
     }
 
+    // Whether this texture has to go through the software decoder rather than
+    // the driver's own BC sampling.
+    //
+    // Hardware BC is off altogether on Adreno (pipeline.cpp), so there every BC
+    // format lands here -- at eight times the bytes for BC1 and four for the
+    // rest, which is the workaround's cost. MW2_ADRENO_BC=narrow keeps the
+    // driver's sampling and software-decodes only the BC1 family, the case its
+    // sampler is known to get wrong. MW2_FORCE_BC_DECOMPRESS makes a clean
+    // desktop driver exercise the same decoder, which is how a decode bug is
+    // told apart from a driver one.
+    bool DecodeInSoftware(uint32_t xenosFormat)
+    {
+        if (!vk::bc::IsBCFormat(xenosFormat)) return false;
+        static const bool force = std::getenv("MW2_FORCE_BC_DECOMPRESS") != nullptr;
+        if (force) return true;
+        if (!vk::pipeline::TextureCompressionBC()) return true;
+        if (vk::bc::AdrenoMode() != vk::bc::AdrenoBC::kDxt1Only) return false;
+        // 18 is DXT1 and 51 its 16_16_16_16 alias: the two that carry a 1-bit
+        // alpha mode, and the sizes the driver samples wrong for a frame.
+        return xenosFormat == 18 || xenosFormat == 51;
+    }
+
     struct Image
     {
         VkImage image = VK_NULL_HANDLE;
@@ -844,10 +866,9 @@ namespace
             return vk::textures::kNone;
         }
 
-        static const bool s_forceBcDecompress = std::getenv("MW2_FORCE_BC_DECOMPRESS") != nullptr;
         gpu::TextureData decompressed;
         const gpu::TextureData* pData = &data;
-        if (vk::bc::IsBCFormat(xenosFormat) && (!vk::pipeline::TextureCompressionBC() || s_forceBcDecompress))
+        if (DecodeInSoftware(xenosFormat))
         {
             int decompFormat = 0;
             if (!vk::bc::Decompress(data, xenosFormat, decompressed, decompFormat))
@@ -1188,10 +1209,9 @@ namespace
     bool Restage(Image& image, const gpu::TextureData& data)
     {
         if (!data.ok) return false;
-        static const bool s_forceBcDecompress = std::getenv("MW2_FORCE_BC_DECOMPRESS") != nullptr;
         gpu::TextureData decompressed;
         const gpu::TextureData* pData = &data;
-        if (vk::bc::IsBCFormat(image.xenosFormat) && (!vk::pipeline::TextureCompressionBC() || s_forceBcDecompress))
+        if (DecodeInSoftware(image.xenosFormat))
         {
             int decompFormat = 0;
             if (!vk::bc::Decompress(data, image.xenosFormat, decompressed, decompFormat))

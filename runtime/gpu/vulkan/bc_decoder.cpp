@@ -4,6 +4,9 @@
 #include <cstring>
 #include <vector>
 
+#include "../../env.h"
+#include "../../log.h"
+
 namespace vk::bc
 {
     bool IsBCFormat(uint32_t xenosFormat)
@@ -19,6 +22,21 @@ namespace vk::bc
         default:
             return false;
         }
+    }
+
+    // Cached, because the environment does not change under a run.
+    AdrenoBC AdrenoMode()
+    {
+        static const AdrenoBC mode = []
+        {
+            const char* value = env::Text("MW2_ADRENO_BC");
+            if (!value) return AdrenoBC::kAll;
+            if (!std::strcmp(value, "hw")) return AdrenoBC::kHardware;
+            if (!std::strcmp(value, "dxt1") || !std::strcmp(value, "narrow")) return AdrenoBC::kDxt1Only;
+            LOGW("vulkan: MW2_ADRENO_BC=%s is neither hw nor dxt1; the whole workaround applies", value);
+            return AdrenoBC::kAll;
+        }();
+        return mode;
     }
 
     namespace

@@ -176,6 +176,15 @@ void android::perf::ApplyMemoryDefaults()
     std::snprintf(text, sizeof text, "%u", arenaMB);
     setenv("MW2_ARENA_MB", text, 0);
 
+    // The arena has a floor -- a frame that runs out of it draws nothing from
+    // the point it ran out -- but the shadow behind it does not: it is 512 MB
+    // in the same buffer, and it is a cache, so without it a draw copies its
+    // vertex data again (slower, and nothing else). On a six-gigabyte phone
+    // that half-gigabyte is most of what the killer would otherwise count, and
+    // it is asked for before the first frame. A variable already set wins, so
+    // a device with room to spare keeps it.
+    if (totalMB <= 6000) setenv("MW2_NO_SHADOW", "1", 0);
+
     // Multisampling is the single most expensive thing a mobile GPU can be
     // asked for, and the title asks for 2x and 4x by default.
     setenv("MW2_NO_MSAA", "1", 0);

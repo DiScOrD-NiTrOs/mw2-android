@@ -278,7 +278,11 @@ bool vk::renderer::Initialise()
     // since they were copied is read there instead of being copied again (see
     // gpu/memory_watch.h). One buffer, so set 2 reaches both and a fetch
     // constant says which by its address alone.
-    static const bool noShadow = diag::Flag("MW2_NO_SHADOW");
+    // Read through env::, not diag::, because the shadow is 512 MB of resident
+    // memory and a release build cannot see a diagnostics switch (diag::Flag is
+    // a constant false there): on the device whose memory is shortest the
+    // switch would have done nothing at all.
+    static const bool noShadow = env::Flag("MW2_NO_SHADOW");
     const uint32_t shadowBytes = guest::kPhysicalEnd - guest::kPhysicalBase;
     uint32_t wanted = uint32_t(env::Number("MW2_ARENA_MB", kArenaWanted >> 20)) << 20;
     bool withShadow = !noShadow;

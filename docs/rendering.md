@@ -156,8 +156,10 @@ write faults once, which marks the page and makes it writable again.
   fails with `EFAULT` on a read-only page. File reads and network packets go
   through a runtime buffer. Bulk runtime writes call `gpu::watch::WillWrite`.
 
-The texture cache uses the same watch. `MW2_NO_SHADOW=1` (diagnostics builds)
-turns the shadow off.
+The texture cache uses the same watch. `MW2_NO_SHADOW=1` turns the shadow off,
+and it is read by every build rather than only a diagnostics one, because it is
+512 MB of resident memory before the first frame is drawn: the Android runtime
+sets it on a phone of six gigabytes or less ([android.md](android.md)).
 
 ## Resolves
 

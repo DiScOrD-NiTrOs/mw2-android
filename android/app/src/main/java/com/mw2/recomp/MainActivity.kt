@@ -239,32 +239,27 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * The log screen: a summary of it, with the whole thing one button away
+     * (LogSummary says what is kept and what is only counted). Share sends the
+     * whole log, because that is what a bug report needs.
+     */
     private fun showLog() {
-        val text = buildString {
-            // The run's log first: when something goes wrong it is almost
-            // always the interesting one, and the launcher's own is short.
-            for (name in listOf("game.log", "launcher.log")) {
-                val file = File(filesDir, name)
-                if (!file.exists()) continue
-                append("===== ").append(name).append(" =====\n")
-                append(file.readTextTail(60_000)).append("\n\n")
-            }
-            for (name in listOf("last-crash-game.txt", "last-crash-launcher.txt")) {
-                val file = File(filesDir, name)
-                if (file.exists()) {
-                    append("===== ").append(name).append(" =====\n")
-                    append(file.readTextTail(8_000)).append("\n\n")
-                }
-            }
-            if (nativeReady) {
-                val tail = safely("") { NativeBridge.nativeLogTail() }
-                if (tail.isNotBlank()) append("===== this session =====\n").append(tail)
-            }
-        }.ifBlank { getString(R.string.log_empty) }
+        val session = if (nativeReady) safely("") { NativeBridge.nativeLogTail() } else ""
+        val renderer = if (nativeReady) safely("") { NativeBridge.nativeRendererInfo() } else ""
+        showLogText(LogSummary.build(this, renderer, session), 11f)
+    }
 
+    /** Everything, as it was, for when the summary is not enough. */
+    private fun showWholeLog() {
+        val session = if (nativeReady) safely("") { NativeBridge.nativeLogTail() } else ""
+        showLogText(LogSummary.whole(this, session), 10f)
+    }
+
+    private fun showLogText(text: String, textSize: Float) {
         val body = TextView(this)
         body.setPadding(32, 24, 32, 24)
-        body.textSize = 10f
+        body.textSize = textSize
         body.setTextIsSelectable(true)
         body.text = text
         val scroll = ScrollView(this)
@@ -273,8 +268,15 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.view_log)
             .setView(scroll)
             .setPositiveButton(R.string.close, null)
-            .setNeutralButton(R.string.share) { _, _ -> share(text) }
+            .setNegativeButton(R.string.log_everything) { _, _ -> showWholeLog() }
+            .setNeutralButton(R.string.share) { _, _ -> share(wholeLog()) }
             .show()
+    }
+
+    /** What Share sends: every log and crash file, not the summary. */
+    private fun wholeLog(): String {
+        val session = if (nativeReady) safely("") { NativeBridge.nativeLogTail() } else ""
+        return LogSummary.whole(this, session)
     }
 
     private fun share(text: String) {

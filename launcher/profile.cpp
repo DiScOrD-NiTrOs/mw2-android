@@ -374,9 +374,16 @@ std::vector<profile::Player> profile::Players()
     // What the online service keeps for each player who signed in...
     for (fs::directory_iterator it(kSaves / "online" / "user", ec), end; !ec && it != end; it.increment(ec))
         add(it->path() / "mpdata", false);
-    // ...and the content package the title saves the offline profile's in.
+    // ...and the content package the title saves the offline profile's in. Not
+    // the copy a replaced save was rotated aside into (runtime/kernel/content.cpp,
+    // RotatePackage): it holds a previous set of stats under the same number, and
+    // offering it here would put the same player in the list twice.
     for (fs::directory_iterator it(kSaves, ec), end; !ec && it != end; it.increment(ec))
-        if (it->path().filename().string().rfind("mpdata_", 0) == 0) add(it->path() / it->path().filename(), true);
+    {
+        const std::string name = it->path().filename().string();
+        if (name.rfind("mpdata_", 0) != 0 || it->path().extension() == ".bak") continue;
+        add(it->path() / name, true);
+    }
     std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.written > b.written; });
     std::vector<Player> players;
     for (Found& entry : found) players.push_back(std::move(entry.player));

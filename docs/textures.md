@@ -97,13 +97,23 @@ its slices as a 3D image, a stacked 2D texture its first slice. 96-bit formats
 
 ## Formats
 
-`vk::formats::VulkanFormatFor`. On desktop GPUs and mobile Adreno chips with hardware
-BC support, the block-compressed formats go across byte for byte, so the untiler's
-output is uploaded directly without CPU decoding.
+`vk::formats::VulkanFormatFor`. On a desktop GPU the block-compressed formats go across
+byte for byte, so the untiler's output is uploaded directly without CPU decoding.
 
-On mobile GPUs lacking native BC compression (such as ARM Mali), the runtime utilizes
-an optimized software decompressor (`bc_decoder.cpp`) that decodes BC1, BC2, BC3, and BC5
-into uncompressed formats (RGBA8 / RG8) using direct 32-bit and 64-bit aligned word writes.
+A mobile GPU that reports no BC support at all -- ARM Mali, most often -- cannot sample
+them, so the runtime decodes BC1, BC2, BC3 and BC5 in software (`bc_decoder.cpp`) into
+uncompressed formats (RGBA8 / RG8), with direct 32- and 64-bit aligned word writes.
+
+Snapdragon handsets are a third case. Adreno reports BC support and samples it wrongly:
+surfaces that read back black or missing for a frame at a time, and vertex garbage in
+vegetation. So the runtime turns the driver's own BC sampling off there and software-decodes
+instead (`pipeline.cpp`, `bc::AdrenoMode`), which is what the workaround costs: eight times
+the bytes in the cache for a BC1 texture and four times for the rest, plus the decode.
+`MW2_ADRENO_BC=dxt1` keeps the driver's sampling for everything but the BC1 family, which
+is the case its sampler is known to get wrong; `MW2_ADRENO_BC=hw` (the same as
+`MW2_FORCE_BC_HW=1`) drops the workaround altogether on a driver that proves clean; and
+`MW2_FORCE_BC_DECOMPRESS=1` makes a desktop driver exercise the same decoder, so a decode
+bug can be told apart from a driver one.
 
 | Xenos (id) | Vulkan |
 |---|---|

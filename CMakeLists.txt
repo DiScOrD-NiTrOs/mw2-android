@@ -3,6 +3,10 @@ project(mw2recomp CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# For the checks that assert rather than report, so `ctest` is a yes or a no.
+# Everything registered runs without game files, a disc or a GPU.
+enable_testing()
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -298,6 +302,9 @@ add_executable(translate-shader
     "${CMAKE_SOURCE_DIR}/tools/translate_shader.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/shader_translator.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/pipeline.cpp"
+    # The device this tool brings up is the runtime's own, so it answers for the
+    # same Snapdragon workaround (bc_decoder.cpp, vk::bc::AdrenoMode).
+    "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/bc_decoder.cpp"
     "${CMAKE_SOURCE_DIR}/runtime/gpu/vulkan/spirv.cpp")
 target_include_directories(translate-shader PRIVATE "${CMAKE_SOURCE_DIR}/runtime")
 # --compile puts a translated module in front of the real driver, which is a
@@ -326,6 +333,26 @@ if(Vulkan_FOUND)
     target_link_libraries(upload-texture PRIVATE Vulkan::Vulkan)
     target_compile_definitions(upload-texture PRIVATE MW2_HAVE_VULKAN=1)
 endif()
+
+# ---- durable writes -------------------------------------------------------
+# Unlike the two above this asserts rather than reporting, so it can run
+# unattended: `ctest` passes or fails. durable.cpp depends on neither the guest
+# nor the recompiled image, so this builds and runs on a tree with no disc,
+# no game files and no GPU behind it -- the one check CI can always make.
+add_executable(durable-test
+    "${CMAKE_SOURCE_DIR}/tests/durable_test.cpp"
+    "${CMAKE_SOURCE_DIR}/runtime/kernel/durable.cpp")
+target_include_directories(durable-test PRIVATE "${CMAKE_SOURCE_DIR}/runtime")
+add_test(NAME durable COMMAND durable-test)
+
+# ---- the log's repeat counting --------------------------------------------
+# Same deal as the test above: it asserts, and nothing it includes needs the
+# guest, a disc or a GPU. What it holds to account is the rule that keeps a run
+# which logs one thing a thousand times readable (runtime/log.h).
+add_executable(log-test
+    "${CMAKE_SOURCE_DIR}/tests/log_repeat_test.cpp")
+target_include_directories(log-test PRIVATE "${CMAKE_SOURCE_DIR}/runtime")
+add_test(NAME log COMMAND log-test)
 endif()
 
 # ---- launcher --------------------------------------------------------------

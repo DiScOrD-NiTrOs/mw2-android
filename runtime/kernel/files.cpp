@@ -74,6 +74,12 @@ namespace
         const char* TypeName() const override { return "file"; }
         ~FileObject() override
         {
+            // Writable is only ever true inside a mounted save package -- the
+            // disc is read-only and a write anywhere else is discarded before it
+            // reaches a handle -- so this is paid on saves and nothing else, and
+            // it puts the bytes on storage before the title is told the handle
+            // has gone. Pointless for one that is about to be deleted.
+            if (handle && writable && !deleteOnClose) kernel::SyncStream(handle);
             if (handle) std::fclose(handle);
             // NT has no delete call of its own: a caller marks the file and the
             // deletion happens when the last handle goes.
@@ -568,7 +574,11 @@ PPC_FUNC(__imp__NtFlushBuffersFile)
     if (auto file = std::dynamic_pointer_cast<FileObject>(LookupHandle(ctx.r3.u32)))
     {
         std::lock_guard g(file->lock);
-        if (file->handle) std::fflush(file->handle);
+        // The title asking for its save to be on disk, and the only chance it
+        // gives to make that true. fflush on its own hands the bytes to the
+        // kernel and returns; the kernel writes them back when it chooses, so a
+        // kill in between loses a save the title was told had landed.
+        if (file->handle) kernel::SyncStream(file->handle);
     }
     ctx.r3.u64 = X_STATUS_SUCCESS;
 }

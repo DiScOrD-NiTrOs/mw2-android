@@ -81,6 +81,40 @@ namespace
         static const bool on = !env::Flag("MW2_NO_AUTO_SAVE_DEVICE");
         return on;
     }
+
+    // A clearing disposition means the title wants the package empty to write a
+    // new save into. Deleting the old one outright is what the console does,
+    // but it opens a window as long as the title's own write in which the
+    // player has no save at all -- and on Android the low memory killer can
+    // take the process away inside it, which costs a campaign. The old package
+    // moves aside instead, one generation deep, so some whole save is always on
+    // disk under one name or the other.
+    //
+    // Nothing reads the backup automatically: the save is the title's own
+    // format and there is no way from here to tell a truncated one from a
+    // short one. Recovery is renaming "<name>.bak" back over "<name>".
+    void RotatePackage(const fs::path& package)
+    {
+        std::error_code ec;
+        fs::path backup = package;
+        backup += ".bak";
+
+        fs::remove_all(backup, ec);
+        ec.clear();
+        fs::rename(package, backup, ec);
+        if (!ec)
+        {
+            LOGK("content: kept the previous %s as %s", package.filename().string().c_str(),
+                 backup.filename().string().c_str());
+            return;
+        }
+
+        // Could not move it aside, and the title still needs the name empty.
+        LOGW("content: cannot keep a backup of %s (%s); emptying it in place",
+             package.string().c_str(), ec.message().c_str());
+        ec.clear();
+        fs::remove_all(package, ec);
+    }
 }
 
 const fs::path& kernel::SaveRoot()
@@ -183,7 +217,7 @@ PPC_FUNC(__imp__XamContentCreateEx)
     case kOpenAlways:
     default:            break;
     }
-    if (!result && clear && existed) fs::remove_all(package, ec);
+    if (!result && clear && existed) RotatePackage(package);
     if (!result && !fs::create_directories(package, ec) && !fs::is_directory(package, ec))
         result = X_ERROR_PATH_NOT_FOUND;
 
@@ -233,7 +267,17 @@ PPC_FUNC(__imp__XamContentDelete)
         {
             fs::remove_all(package, ec);
             result = ec ? X_ERROR_PATH_NOT_FOUND : X_ERROR_SUCCESS;
-            if (!result) { LOGK("content: deleted %s", package.string().c_str()); }
+            // The player asked for this save to be gone, so the copy
+            // RotatePackage kept goes with it -- leaving it would be a save
+            // that is still on disk after being deleted.
+            if (!result)
+            {
+                std::error_code also;
+                fs::path backup = package;
+                backup += ".bak";
+                fs::remove_all(backup, also);
+                LOGK("content: deleted %s", package.string().c_str());
+            }
         }
     }
     CompleteOverlapped(ctx.r5.u32, result);
