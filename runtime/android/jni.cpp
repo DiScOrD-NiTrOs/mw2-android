@@ -23,6 +23,7 @@
 #include "../gpu/vulkan/pipeline.h"
 #include "../gpu/vulkan/renderer_state.h"
 #include "../console.h"
+#include "../online/service.h"
 
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
@@ -259,6 +260,11 @@ MW2_NATIVE(jboolean, nativeInit)(JNIEnv* env, jobject, jstring filesDir, jstring
     // backtrace above all, now reaches that file instead of /dev/null.
     android::CaptureStandardStreams();
     LOGI("--- MW2 on Android ---");
+#ifdef MW2_VERSION_TU0
+    LOGI("android: disc version (TU0)");
+#else
+    LOGI("android: title update 6 (TU6)");
+#endif
     LOGI("android: files %s", g_paths.files.c_str());
     LOGI("android: external %s", g_paths.external.c_str());
     return JNI_TRUE;
@@ -473,6 +479,38 @@ MW2_NATIVE(void, nativePadEnabled)(JNIEnv*, jobject, jboolean enabled)
     android::input::SetHardwarePadEnabled(enabled == JNI_TRUE);
 }
 
+// The title's lobby "Invite friends" from the pause menu: invites every
+// player this copy hears on the network (lan.cpp). Silent when there is no
+// service or nobody to invite to anything yet.
+MW2_NATIVE(void, nativeInviteFriends)(JNIEnv*, jobject)
+{
+    if (auto* service = online::Get()) service->InviteFriends();
+}
+
+// How many other copies this one hears, for the HUD's network line.
+MW2_NATIVE(jint, nativeLanPeers)(JNIEnv*, jobject)
+{
+    if (auto* service = online::Get()) return jint(service->PeerCount());
+    return 0;
+}
+
+// Joinable peers' names, one per line, for the join picker.
+MW2_NATIVE(jstring, nativeLanPeerNames)(JNIEnv* env, jobject)
+{
+    std::string names;
+    if (auto* service = online::Get()) names = service->PeerNames();
+    return FromString(env, names);
+}
+
+// Join a heard peer right now (an explicit tap: no accept flag needed).
+MW2_NATIVE(jboolean, nativeLanJoinPeer)(JNIEnv* env, jobject, jstring name)
+{
+    const std::string peer = ToString(env, name);
+    if (peer.empty()) return JNI_FALSE;
+    if (auto* service = online::Get()) return service->JoinPeer(peer) ? JNI_TRUE : JNI_FALSE;
+    return JNI_FALSE;
+}
+
 // ---- installing ------------------------------------------------------------
 
 MW2_NATIVE(jboolean, nativeGameInstalled)(JNIEnv* env, jobject, jstring gameDirectory)
@@ -517,6 +555,20 @@ MW2_NATIVE(jstring, nativeInstallProgress)(JNIEnv* env, jobject, jlongArray out)
 MW2_NATIVE(void, nativeCancelInstall)(JNIEnv*, jobject)
 {
     install::CancelInstall();
+}
+
+// Blocking: applies the downloaded title update 6 after the disc install
+// (TU6 builds). Returns null when it worked, else the sentence to show.
+MW2_NATIVE(jstring, nativeApplyTu6)(JNIEnv* env, jobject, jstring packagePath, jstring gameDirectory)
+{
+    const std::string package = ToString(env, packagePath);
+    const std::string folder = ToString(env, gameDirectory);
+    if (package.empty() || folder.empty()) return FromString(env, "The update has nowhere to go.");
+    install::SetGameFolder(folder);
+    std::string error;
+    if (install::ApplyTu6(package, error)) return nullptr;
+    if (error.empty()) error = "The update could not be applied.";
+    return FromString(env, error);
 }
 
 // ---- what the overlay shows -------------------------------------------------

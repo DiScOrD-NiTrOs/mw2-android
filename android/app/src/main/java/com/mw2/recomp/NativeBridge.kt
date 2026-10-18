@@ -112,6 +112,18 @@ object NativeBridge {
     external fun nativePadConnected(user: Int, connected: Boolean)
     external fun nativePadEnabled(enabled: Boolean)
 
+    /** Invite every network player heard to this player's lobby, if any. */
+    external fun nativeInviteFriends()
+
+    /** Other copies heard on the network right now (0 when offline/alone). */
+    external fun nativeLanPeers(): Int
+
+    /** Joinable peers' names, one per line. */
+    external fun nativeLanPeerNames(): String
+
+    /** Join a heard peer now. False when nobody by that name is heard. */
+    external fun nativeLanJoinPeer(name: String): Boolean
+
     // ---- the graphics driver ----------------------------------------------
 
     /** An unpacked driver folder and the library inside it, or "" for the system's. */
@@ -129,6 +141,10 @@ object NativeBridge {
     external fun nativeInstallProgress(progress: LongArray): String
 
     external fun nativeCancelInstall()
+
+    /** Blocking. Applies the downloaded title update 6 (TU6 builds only).
+     * Returns null when it worked, or a sentence to show when it did not. */
+    external fun nativeApplyTu6(packagePath: String, gameDir: String): String?
 
     // ---- what the overlay shows --------------------------------------------
 

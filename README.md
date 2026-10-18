@@ -171,10 +171,10 @@ TITLE=mp ./build.sh
 
 # 3. Build the Campaign APK via Gradle
 cd android
-./gradlew assembleCampaignRelease
+./gradlew assembleCampaignTu0Release
 
 # The output APK will be in:
-# android/app/build/outputs/apk/campaign/release/app-campaign-release.apk
+# android/app/build/outputs/apk/campaignTu0/release/*.apk
 ```
 
 #### Automated GitHub Actions CI

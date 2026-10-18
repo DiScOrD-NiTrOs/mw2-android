@@ -265,10 +265,29 @@ class GameActivity : AppCompatActivity(), NativeListener {
                     String.format(Locale.US, "  •  ⚡ Shaders %d%% (%d/%d)", pct, warmupCompleted, warmupQueued)
                 } else ""
 
+                // Other copies heard on the network (multiplayer only). Zero
+                // with a friend hosting beside this phone means discovery is
+                // not arriving -- same WiFi, firewall, hotspot; see the guide.
+                // The TU badge matters: TU0 plays only with TU0, TU6 with TU6.
+                val isMpHud = packageName.contains(".mp")
+                val tuHud = BuildConfig.MW2_TU.uppercase()
+                val lanPeers = if (isMpHud) {
+                    try {
+                        NativeBridge.nativeLanPeers()
+                    } catch (_: Throwable) {
+                        0
+                    }
+                } else 0
+                val lanPart = if (isMpHud) {
+                    String.format(Locale.US, "  •  LAN: %d · %s", lanPeers, tuHud)
+                } else {
+                    String.format(Locale.US, "  •  %s", tuHud)
+                }
+
                 statsText.text = String.format(
                     Locale.US,
-                    "%d FPS%s  •  CPU %s%s%s  •  Tex %dMB%s  [▼ HUD]",
-                    fps, ftPart, cpuStr, tempPart, ramPart, texMb, warmupPart
+                    "%d FPS%s  •  CPU %s%s%s  •  Tex %dMB%s%s  [▼ HUD]",
+                    fps, ftPart, cpuStr, tempPart, ramPart, texMb, warmupPart, lanPart
                 )
 
                 if (hudIsExpanded) {
@@ -309,6 +328,10 @@ class GameActivity : AppCompatActivity(), NativeListener {
                         append("MEMORY & VIEWPORT\n")
                         append("  App / System Total RAM: $ramStr\n")
                         append("  Internal Render: ${resW}×${resH}  •  Refresh: ${refreshHz().roundToInt()} Hz\n")
+                        if (packageName.contains(".mp")) {
+                            append("\nNETWORK\n")
+                            append("  Players heard on LAN: $lanPeers\n")
+                        }
                     }
                 }
             }
@@ -683,12 +706,21 @@ class GameActivity : AppCompatActivity(), NativeListener {
         // Everything here is one of the runtime's own switches
         // (docs/switches.md); the app just fills them in.
         NativeBridge.nativeSetOption("MW2_FULLSCREEN", "1")
+        // MP refuses to start matches without a link; runtime defaults to up
+        // for MP and down for SP (kernel/net.cpp), but be explicit so a
+        // misbuilt lib still reports a link in the MP app.
+        if (packageName.contains(".mp")) {
+            NativeBridge.nativeSetOption("MW2_NET_LINK", "1")
+        }
         NativeBridge.nativeSetOption("MW2_NO_AUDIO", if (prefs.audioEnabled) "" else "1")
         NativeBridge.nativeSetOption("MW2_NO_MSAA", if (prefs.multisampling) "" else "1")
         if (prefs.renderScale in 1..3) {
             NativeBridge.nativeSetOption("MW2_SCALE", prefs.renderScale.toString())
         }
         NativeBridge.nativeSetOption("MW2_STUTTERS", "1")
+        // Full synchronous precompile at boot when the player asked for it in
+        // Settings; otherwise the tiered instant-boot budget + background warmup.
+        NativeBridge.nativeSetOption("MW2_SHADER_PREWARM_ALL", if (prefs.prewarmAllShaders) "1" else "")
         NativeBridge.nativeSetOption(
             "MW2_TEXTURE_BUDGET_MB",
             if (prefs.textureBudgetMB > 0) prefs.textureBudgetMB.toString() else "",
@@ -705,24 +737,76 @@ class GameActivity : AppCompatActivity(), NativeListener {
             } else if (legacyShaders.exists() && legacyShaders.length() > 0) {
                 legacyShaders.copyTo(shaderCacheFile, overwrite = true)
             } else {
-                try {
-                    assets.open("shader_cache.bin").use { input ->
-                        shaderCacheFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    android.util.Log.i("MW2", "Unpacked bundled shader_cache.bin from assets to ${shaderCacheFile.absolutePath}")
-                } catch (_: Exception) {}
+                adoptRicherSeed(shaderCacheFile)
             }
+        } else {
+            // A fuller bundled seed replaces a thinner installed cache, so a
+            // recorded playthrough shipped in the APK actually reaches play.
+            adoptRicherSeed(shaderCacheFile)
         }
         NativeBridge.nativeSetOption("MW2_PIPELINE_CACHE", "${filesDir.absolutePath}/pipeline.cache")
         NativeBridge.nativeSetOption("MW2_SHADER_CACHE", shaderCacheFile.absolutePath)
 
+        // Identity on the network and lobby behaviour. Empty name means the
+        // profile's (fresh installs show "Player 1"); the accept flag lets a
+        // host's invitation join without asking.
+        NativeBridge.nativeSetOption("MW2_NAME", prefs.playerName)
+        NativeBridge.nativeSetOption("MW2_LAN_ACCEPT", if (prefs.lanAccept) "1" else "")
+        NativeBridge.nativeSetOption("MW2_LAN_IFACE", prefs.lanIface)
         NativeBridge.nativeLookSettings(
             prefs.lookSensitivityX, prefs.lookSensitivityY,
             prefs.lookSmoothing, prefs.invertLook, prefs.lookSaturation,
         )
         NativeBridge.nativePadEnabled(prefs.gamepadEnabled)
+    }
+
+    private data class SeedCounts(val magic: Int, val version: Int, val shaders: Int, val pipelines: Int)
+
+    private fun readSeedCounts(stream: java.io.InputStream): SeedCounts? = try {
+        stream.use {
+            val head = ByteArray(16)
+            var read = 0
+            while (read < 16) {
+                val n = it.read(head, read, 16 - read)
+                if (n <= 0) break
+                read += n
+            }
+            if (read < 16) null
+            else {
+                val words = java.nio.ByteBuffer.wrap(head).order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+                SeedCounts(words[0], words[1], words[2], words[3])
+            }
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    // The APK ships a recorded seed; a fuller one wins over a thinner
+    // installed cache, whichever side it came from. Headers compared, never
+    // trusted blindly; a foreign or corrupt file is left alone.
+    private fun adoptRicherSeed(target: File) {
+        val seed = try {
+            readSeedCounts(assets.open("shader_cache.bin"))
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val have = if (target.exists() && target.length() >= 16) {
+            try {
+                readSeedCounts(target.inputStream())
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+        val take = have == null ||
+            (seed.magic == have.magic && seed.version == have.version && seed.pipelines > have.pipelines)
+        if (!take) return
+        try {
+            assets.open("shader_cache.bin").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            android.util.Log.i("MW2", "Shader seed: bundled ${seed.pipelines} pipelines replaces ${have?.pipelines ?: 0}")
+        } catch (_: Exception) {
+        }
     }
 
     private fun applyDriver() {
@@ -738,30 +822,99 @@ class GameActivity : AppCompatActivity(), NativeListener {
     // ---- the pause menu ----------------------------------------------------------
 
     private fun showMenu() {
-        val items = arrayOf(
-            getString(R.string.resume),
-            getString(R.string.edit_controls),
-            if (prefs.touchControls) getString(R.string.hide_touch_controls)
-            else getString(R.string.show_touch_controls),
-            if (prefs.gamepadEnabled) getString(R.string.disable_gamepad)
-            else getString(R.string.enable_gamepad),
-            if (prefs.showStats) getString(R.string.hide_stats) else getString(R.string.show_stats),
-            getString(R.string.quit),
+        // Built as a list: the invite entry only exists in the multiplayer
+        // app, so fixed indices would point at the wrong rows there.
+        val labels = mutableListOf(
+            getString(R.string.resume) to { _: android.content.DialogInterface -> },
+            getString(R.string.edit_controls) to { _: android.content.DialogInterface -> beginEditing() },
         )
+        if (packageName.contains(".mp")) {
+            labels.add(getString(R.string.invite_players) to { _: android.content.DialogInterface -> inviteNetworkPlayers() })
+            labels.add(getString(R.string.join_game) to { _: android.content.DialogInterface -> pickNetworkPeer() })
+            labels.add(getString(R.string.max_rank) to { _: android.content.DialogInterface -> runCheat(R.string.max_rank, Cheats::maxRank) })
+            labels.add(getString(R.string.unlock_all) to { _: android.content.DialogInterface -> runCheat(R.string.unlock_all, Cheats::unlockEverything) })
+            labels.add(getString(R.string.prestige_up) to { _: android.content.DialogInterface -> runCheat(R.string.prestige_up, Cheats::prestigeUp) })
+        }
+        labels.add(getString(if (prefs.touchControls) R.string.hide_touch_controls else R.string.show_touch_controls) to { _: android.content.DialogInterface -> setTouchControls(!prefs.touchControls) })
+        labels.add(getString(if (prefs.gamepadEnabled) R.string.disable_gamepad else R.string.enable_gamepad) to { _: android.content.DialogInterface -> setGamepad(!prefs.gamepadEnabled) })
+        labels.add(getString(if (prefs.showStats) R.string.hide_stats else R.string.show_stats) to { _: android.content.DialogInterface -> setStats(!prefs.showStats) })
+        labels.add(getString(R.string.quit) to { _: android.content.DialogInterface -> confirmQuit() })
         AlertDialog.Builder(this)
             .setTitle(R.string.paused)
-            .setItems(items) { dialog, which ->
-                when (which) {
-                    0 -> dialog.dismiss()
-                    1 -> beginEditing()
-                    2 -> setTouchControls(!prefs.touchControls)
-                    3 -> setGamepad(!prefs.gamepadEnabled)
-                    4 -> setStats(!prefs.showStats)
-                    5 -> confirmQuit()
-                }
+            .setItems(labels.map { it.first }.toTypedArray()) { dialog, which ->
+                dialog.dismiss()
+                labels[which].second(dialog)
             }
             .setOnDismissListener { goFullscreen() }
             .show()
+    }
+
+    // The title lobby's "Invite friends" for the network: invites every
+    // player this copy hears. Nothing happens with nobody heard yet -- the
+    // HUD's LAN line says how many that is.
+    private fun inviteNetworkPlayers() {
+        if (NativeBridge.isLoaded()) {
+            try {
+                NativeBridge.nativeInviteFriends()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    // Join a heard host right now, re-firing the join even if the automatic
+    // one raced the menu and was swallowed.
+    private fun pickNetworkPeer() {
+        val names = try {
+            NativeBridge.nativeLanPeerNames().split("\n").filter { it.isNotBlank() }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+        if (names.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setMessage(R.string.no_peers)
+                .setPositiveButton(R.string.close, null)
+                .setOnDismissListener { goFullscreen() }
+                .show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.join_game)
+            .setItems(names.toTypedArray()) { dialog, which ->
+                dialog.dismiss()
+                try {
+                    NativeBridge.nativeLanJoinPeer(names[which])
+                } catch (_: Throwable) {
+                }
+                goFullscreen()
+            }
+            .setOnDismissListener { goFullscreen() }
+            .show()
+    }
+
+    private fun savesDir(): java.io.File {
+        val gameDir = prefs.gameDirectory.ifEmpty {
+            (getExternalFilesDir(null) ?: filesDir).absolutePath + "/game"
+        }
+        return java.io.File(java.io.File(gameDir).parent ?: filesDir.absolutePath, "saves")
+    }
+
+    private fun runCheat(label: Int, cheat: (java.io.File) -> Int) {
+        Thread {
+            val text = try {
+                val n = cheat(savesDir())
+                getString(R.string.cheats_done, getString(label), n)
+            } catch (e: Throwable) {
+                getString(R.string.cheats_failed, e.message ?: "")
+            }
+            handler.post {
+                AlertDialog.Builder(this)
+                    .setTitle(label)
+                    .setMessage(text)
+                    .setPositiveButton(R.string.close, null)
+                    .setOnDismissListener { goFullscreen() }
+                    .show()
+            }
+        }.start()
     }
 
     private fun setTouchControls(on: Boolean) {

@@ -29,11 +29,14 @@ namespace online
     };
 
     // A session a friend can join, opaque to the service: the console's
-    // XSESSION_INFO (session id, host address, key), 60 bytes.
+    // XSESSION_INFO (session id, host address, key), 60 bytes, plus the
+    // slots and nonce the title's `connect` line carries beside them.
     constexpr size_t kSessionInfoSize = 60;
     struct Joinable
     {
         uint8_t session[kSessionInfoSize]{};
+        uint8_t publicSlots = 0, privateSlots = 0;
+        uint8_t nonce[8]{};
     };
 
     struct Invite
@@ -86,6 +89,16 @@ namespace online
         virtual bool NextJoin(std::string& connect) { (void)connect; return false; }
         // The service's own way to pick friends to invite, if it has one.
         virtual void InviteFriends() {}
+        // Diagnostics for the app: how many other copies this one hears on
+        // the network right now. Zero while hosting alone is expected; zero
+        // with a friend hosting beside it means discovery is not arriving.
+        virtual size_t PeerCount() { return 0; }
+        // Joinable peers' names, one per line, for a picker UI.
+        virtual std::string PeerNames() { return {}; }
+        // Join a heard peer by name (an explicit tap, so no accept flag is
+        // needed): system-link sessions through the `connect` line, Live ones
+        // through the invitation path. False when nobody by that name is heard.
+        virtual bool JoinPeer(const std::string& name) { (void)name; return false; }
 
         // Optional: Xbox LIVE parties and private matches. A service that says
         // yes here has the player signed in to Live, which opens the title's

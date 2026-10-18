@@ -10,6 +10,7 @@
 // With no <disc>, --install brings the install already in game/ up to date.
 #include "disc.h"
 #include "fonts.h"
+#include "mods.h"
 #include "profile.h"
 #include "report.h"
 #include "settings.h"
@@ -189,12 +190,15 @@ namespace
     // What an entry does.
     enum class Action
     {
-        None, PlayCampaign, PlayMultiplayer, Install, ChooseUpdate, Cancel, Quit,
+        None, PlayCampaign, PlayMultiplayer, Install, InstallLocation, ChooseUpdate, Cancel, Quit,
+        Mods, GetOtherBuild,
         // The profile screen and what it does.
         Profile, Back, NextPlayer, Rename, PlayAs, MaxRank, Prestige, UnlockEverything, UnlockMissions, AllStars,
         CheckUpdate, InstallUpdate,
         // The graphics screen, and the next of what each of its entries sets.
         Graphics, Resolution, FpsLimit, Fov,
+        // The network screen: who this machine is online and what it joins.
+        Network, LanAccept, NetName, NetJoin, NetIface,
         // The bug report screen: a run of either game with its log kept.
         Report, ReportCampaign, ReportMultiplayer,
         // The question a start asks when a recorded run was never reported.
@@ -233,6 +237,8 @@ namespace
         size_t player = 0;
         bool renaming = false;          // the keyboard types a profile's new name
         std::string newName;
+        bool editingNet = false;        // the keyboard types a network name instead
+        int netField = 0;               // 0 player name, 1 auto-join player
         profile::Campaign campaign;
         update::Release release;        // the newer version a look found, if `newer`
         bool newer = false;
@@ -240,6 +246,7 @@ namespace
         bool gameRunning = false;       // looked up once a second while the profile screen shows
         bool reportScreen = false;
         bool graphicsScreen = false;
+        bool networkScreen = false;
         // What FPS LIMIT goes through: the console's 60, two rates screens
         // commonly have, and none. A screen at another rate has its own in
         // place of the common one nearest to it, and until the player chooses,
@@ -287,6 +294,24 @@ namespace
                 &picked, window, filters, 2, nullptr, false);
         }
 
+        void AskFolder(Action forAction)
+        {
+            {
+                std::lock_guard lock(picked.lock);
+                picked.answered = false;
+                picked.forAction = forAction;
+            }
+            SDL_ShowOpenFolderDialog(
+                [](void* data, const char* const* list, int) {
+                    auto* p = static_cast<Picked*>(data);
+                    std::lock_guard lock(p->lock);
+                    p->failed = !list;
+                    p->path = (list && *list) ? *list : "";
+                    p->answered = true;
+                },
+                &picked, window, nullptr, false);
+        }
+
         void Install(const fs::path& from, const fs::path& update)
         {
             message.clear();
@@ -313,6 +338,21 @@ namespace
                 // The disc's files are there already: the update is all that is missing.
                 if (state == setup::State::NeedsUpdate) Install({}, {});
                 else Ask(Action::Install, "Disc image", "iso");
+                break;
+            case Action::InstallLocation:
+                AskFolder(Action::InstallLocation);
+                break;
+            case Action::Mods:
+                AskFolder(Action::Mods);
+                break;
+            case Action::GetOtherBuild:
+                // The other game version lives in its own archives beside
+                // this one's, on the releases page.
+                if (!SDL_OpenURL("https://github.com/CyberLifeYT/mw2-crossplay/releases"))
+                {
+                    message = "Get it from:\nhttps://github.com/CyberLifeYT/mw2-crossplay/releases";
+                    messageIsError = false;
+                }
                 break;
             case Action::ChooseUpdate:
                 Ask(Action::ChooseUpdate, "Title update", "*");
@@ -372,12 +412,14 @@ namespace
             case Action::Profile:
             case Action::Report:
             case Action::Graphics:
+            case Action::Network:
             case Action::Back:
                 gameRunning = action == Action::Profile && GameRunning();
                 gameChecked = std::chrono::steady_clock::now();
                 profileScreen = action == Action::Profile;
                 reportScreen = action == Action::Report;
                 graphicsScreen = action == Action::Graphics;
+                networkScreen = action == Action::Network;
                 message.clear();
                 messageIsError = false;
                 focusPlaced = false;
@@ -413,6 +455,20 @@ namespace
                 // Choosing goes one step wider, and round to the console's.
                 settings::SetFov(settings::Fov() >= settings::kWidestFov ? settings::kConsoleFov : settings::Fov() + settings::kFovStep);
                 break;
+            case Action::LanAccept:
+                settings::SetLanAccept(!settings::LanAccept());
+                break;
+            case Action::NetName:
+            case Action::NetJoin:
+            case Action::NetIface:
+                editingNet = true;
+                netField = action == Action::NetJoin ? 1 : action == Action::NetIface ? 2 : 0;
+                newName = netField == 1 ? settings::LanJoin()
+                        : netField == 2 ? settings::LanIface() : settings::LanName();
+                message.clear();
+                messageIsError = false;
+                SDL_StartTextInput(window);
+                break;
             case Action::Rename:
                 renaming = true;
                 newName = players[player].name;
@@ -432,9 +488,40 @@ namespace
             }
         }
 
-        // The keyboard while a profile is renamed.
+        // The keyboard while a name is typed: a profile's, or a network
+        // setting's (netField 0 player name, 1 auto-join player, 2 adapter).
         void Type(const SDL_Event& event)
         {
+            if (editingNet)
+            {
+                // Adapter values hold dots and run longer than player names.
+                const size_t limit = netField == 2 ? 64 : 15;
+                if (event.type == SDL_EVENT_TEXT_INPUT)
+                {
+                    for (const char* c = event.text.text; *c; c++)
+                        if (newName.size() < limit && (std::isalnum(static_cast<unsigned char>(*c)) || *c == ' ' ||
+                                                       (netField == 2 && *c == '.'))) newName += *c;
+                    return;
+                }
+                if (event.type != SDL_EVENT_KEY_DOWN) return;
+                if (event.key.key == SDLK_BACKSPACE && !newName.empty()) newName.pop_back();
+                const bool keep = event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER;
+                if (!keep && event.key.key != SDLK_ESCAPE) return;
+                editingNet = false;
+                SDL_StopTextInput(window);
+                if (!keep) return;
+                if (netField == 1) settings::SetLanJoin(newName);
+                else if (netField == 2) settings::SetLanIface(newName);
+                else settings::SetLanName(newName);
+                message = netField == 1 ? (newName.empty() ? "No player is joined automatically."
+                                                           : "Joining " + newName + " when seen.")
+                        : netField == 2 ? (newName.empty() ? "Announcing the first connection up."
+                                                           : "Announcing addresses matching " + newName + ".")
+                                        : (newName.empty() ? "Other players see the profile's name."
+                                                           : "Other players see " + newName + ".");
+                messageIsError = false;
+                return;
+            }
             if (event.type == SDL_EVENT_TEXT_INPUT)
             {
                 for (const char* c = event.text.text; *c; c++)
@@ -677,11 +764,81 @@ namespace
             return entries;
         }
 
+        // The network screen: who this machine is to other players, and what
+        // it joins without asking. Kept in .env, for the next start.
+        std::vector<Entry> NetworkEntries() const
+        {
+            std::vector<Entry> entries;
+            auto add = [&](Action action, std::string label, const char* heading, std::string text) {
+                Entry entry;
+                entry.shown.label = std::move(label);
+                entry.action = action;
+                entry.heading = heading;
+                entry.text = std::move(text);
+                entries.push_back(std::move(entry));
+                return &entries.back();
+            };
+            const std::string name = settings::LanName();
+            const bool typingName = editingNet && netField == 0;
+            add(Action::NetName, std::string("PLAYER NAME ") + (name.empty() ? "PROFILE" : name), "PLAYER NAME",
+                typingName ? "New name: " + newName + "_\n\nENTER keeps it, ESC leaves it as it was."
+                           : std::string("The name other players on the network see: now ") +
+                             (name.empty() ? "the profile's name." : name + ".") +
+                             "\n\nType one with the keyboard (15 characters at most). "
+                             "Without one, others see the profile's name.");
+            const std::string join = settings::LanJoin();
+            const bool typingJoin = editingNet && netField == 1;
+            add(Action::NetJoin, std::string("JOIN PLAYER ") + (join.empty() ? "OFF" : join), "JOIN PLAYER",
+                typingJoin ? "Player to join: " + newName + "_\n\nENTER keeps it, ESC leaves it as it was."
+                           : std::string("Joins that player's lobby as soon as it is seen") +
+                             (join.empty() ? ", turned off." : ": " + join + ".") +
+                             "\n\nType the name exactly as their machine shows it. "
+                             "The server browser and invitations work either way.");
+            const std::string adapter = settings::LanIface();
+            const bool typingAdapter = editingNet && netField == 2;
+            add(Action::NetIface, std::string("ADAPTER ") + (adapter.empty() ? "AUTO" : adapter), "ADAPTER",
+                typingAdapter ? "Adapter to announce: " + newName + "_\n\nENTER keeps it, ESC leaves it as it was."
+                              : std::string("Announces ") +
+                                (adapter.empty() ? "the first connection up." : "addresses matching " + adapter + ".") +
+                                "\n\nA name or address piece (WiFi, wlan0, 192.168.1): the sessions "
+                                "invite to the announced address, so on a VPN and a LAN at once, "
+                                "name the one the other players are on.");
+            const bool accept = settings::LanAccept();
+            add(Action::LanAccept, std::string("AUTO-ACCEPT INVITES ") + (accept ? "ON" : "OFF"), "AUTO-ACCEPT INVITES",
+                std::string("When another player on the network invites this machine to their lobby, ") +
+                (accept ? "it joins without asking." : "it only logs the invitation.") +
+                "\n\nChoose to switch it " + (accept ? "off." : "on.") +
+                " Both sides need to hear each other first: same network, firewall open.");
+            add(Action::Back, "BACK", "", "")->shown.ruleAbove = true;
+            return entries;
+        }
+
         // A file the dialog returned, or one dropped on the window.
         void Take(Action forAction, const std::string& path)
         {
             if (job || path.empty()) return;
             if (forAction == Action::ChooseUpdate) Install(state == setup::State::NeedsUpdate ? fs::path() : disc, FromUtf8(path));
+            else if (forAction == Action::InstallLocation)
+            {
+                // A drive with room, not just beside the launcher: the ~7 GB
+                // of game files go under the chosen folder from now on.
+                std::string error;
+                if (setup::SetInstallLocation(FromUtf8(path), error))
+                {
+                    message = "Game files go in:\n" + setup::InstallLocationText();
+                    messageIsError = false;
+                }
+                else { message = error; messageIsError = true; }
+                state = setup::Detect();
+                sound::Load();
+                focusPlaced = false;
+            }
+            else if (forAction == Action::Mods)
+            {
+                message = mods::Report(mods::Install(FromUtf8(path), setup::GameFolder()));
+                messageIsError = false;
+                focusPlaced = false;
+            }
             else { disc = FromUtf8(path); Install(disc, {}); }
         }
 
@@ -787,6 +944,7 @@ namespace
             if (profileScreen) return ProfileEntries();
             if (reportScreen) return ReportEntries();
             if (graphicsScreen) return GraphicsEntries();
+            if (networkScreen) return NetworkEntries();
             std::vector<Entry> entries;
             auto add = [&](Action action, std::string label, bool enabled, const char* heading, std::string text) {
                 Entry entry;
@@ -814,7 +972,10 @@ namespace
             add(Action::PlayCampaign, "PLAY CAMPAIGN", installed && campaign, "CAMPAIGN",
                 play(campaign, kCampaign, "The campaign and Special Ops, alone or in split screen."));
             add(Action::PlayMultiplayer, "PLAY MULTIPLAYER", installed && multiplayer, "MULTIPLAYER",
-                play(multiplayer, kMultiplayer, "Multiplayer: split screen, system link and private matches."));
+                play(multiplayer, kMultiplayer, "Multiplayer: split screen, system link and private matches.\n\n"
+                     "Windows may ask to allow mw2-mp through the firewall on first launch: allow it, "
+                     "or no other machine can see or join this one (UDP). "
+                     "All players must be on the same network; a phone hotspot the PC joins is the most reliable."));
 
             // Until the game is whole, installing it is the next thing to do.
             auto install = [&] {
@@ -827,18 +988,36 @@ namespace
                                "The update is downloaded (2 MB) and applied to the installed game. Your disc is not needed.");
                 return add(Action::Install, installed ? "REINSTALL" : "INSTALL GAME", true, "INSTALL",
                            std::string("Choose the image of your Xbox 360 disc (.iso), or drop it on this window.\n\n"
-                                       "Its files, about 7 GB, are copied into the game folder beside the launcher") +
+                                       "Its files, about 7 GB, are copied into the game folder (INSTALL LOCATION picks the drive)") +
                                (setup::UsesUpdate() ? ", and title update 6 is downloaded (2 MB) and applied." : ".") +
                                "\n\nThe disc is the USA/Europe one, version 1.0.557.");
             };
             const bool reinstall = installed && !needsUpdateFile;
             if (!reinstall) install()->shown.ruleAbove = true;
+            add(Action::InstallLocation, "INSTALL LOCATION", true, "INSTALL LOCATION",
+                std::string("Where the game files go. Now:\n") + setup::InstallLocationText() +
+                "\n\nChoose any folder, on any drive with room: about 7 GB is copied there at install time, "
+                "instead of beside the launcher. Saves stay beside the launcher, and files already "
+                "installed stay where they are.");
 
             // What the game is played with.
             add(Action::Graphics, "GRAPHICS", true, "GRAPHICS", "The size the game draws at, how many frames a second and how wide its view is.")->shown.ruleAbove = true;
+            add(Action::Network, "NETWORK", true, "NETWORK", "Who this machine is to other players on the network, and what it joins without asking.");
             add(Action::Profile, "PROFILES", true, "PROFILES",
                 "Set the multiplayer rank and prestige, unlock everything, and open the campaign's and Special Ops' missions.");
             add(Action::None, "MAPS", false, "MAPS", "Add and remove custom maps.\n\nNot available yet.")->shown.tag = "SOON";
+            add(Action::Mods, "MODS", installed, "MODS",
+                installed ? "Extra maps, weapons and modes from mod packs, for this install's game version.\n\nChoose the extracted folder: its .ff, .pak and .bik files are copied into the game folder. Anything else in it (scripts, plugins, documents) is reported and left alone, with why."
+                          : "Install the game first.");
+#ifdef MW2_VERSION_TU0
+            add(Action::GetOtherBuild, "GET TU6 BUILD", true, "TITLE UPDATE 6",
+                "The separate build for title update 6, which mods need. It plays only with TU6 copies, "
+                "never with this disc-version one.\n\nChoose to open the releases page, where its archives wait beside this one's.");
+#else
+            add(Action::GetOtherBuild, "GET TU0 BUILD", true, "DISC VERSION",
+                "The separate build for the disc version, which phones and crossplay use. It plays only with "
+                "disc-version copies, never with this title-update one.\n\nChoose to open the releases page, where its archives wait beside this one's.");
+#endif
 
             // The copy itself. A build nobody released has no version to compare.
             const bool released = *update::Current() != 0;
@@ -912,6 +1091,7 @@ namespace
         {
             SDL_Event event;
             const bool wasRenaming = app.renaming;
+            const bool wasEditingNet = app.editingNet;
             while (SDL_PollEvent(&event))
             {
                 ImGui_ImplSDL3_ProcessEvent(&event);
@@ -922,14 +1102,14 @@ namespace
                 }
                 // A disc image dropped on the window installs from it; while
                 // the update is what is asked for, the file is the update.
-                // A profile's new name, typed.
-                if (app.renaming) app.Type(event);
+                // A new name, typed (a profile's, or a network setting's).
+                if (app.renaming || app.editingNet) app.Type(event);
                 if (event.type == SDL_EVENT_DROP_FILE && event.drop.data)
                     app.Take(app.needsUpdateFile ? Action::ChooseUpdate : Action::Install, event.drop.data);
             }
             app.Poll();
             // The key that ended the typing is not also a choice.
-            const bool typed = wasRenaming && !app.renaming;
+            const bool typed = (wasRenaming && !app.renaming) || (wasEditingNet && !app.editingNet);
 
             ImGui_ImplSDLRenderer3_NewFrame();
             ImGui_ImplSDL3_NewFrame();
@@ -957,10 +1137,11 @@ namespace
             app.focus = std::clamp(app.focus, 0, count - 1);
             int chosen = pressed({ ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space, ImGuiKey_GamepadFaceDown }, false) ? app.focus : -1;
             // While a name is typed the keys are its letters, and the entry stays.
-            if (app.renaming || typed) { app.focus = focusBefore; chosen = -1; }
-            if (app.renaming || typed) {}
+            const bool typing = app.renaming || app.editingNet;
+            if (typing || typed) { app.focus = focusBefore; chosen = -1; }
+            if (typing || typed) {}
             else if (app.job && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false)) app.job->progress.cancel = true;
-            else if ((app.profileScreen || app.graphicsScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
+            else if ((app.profileScreen || app.graphicsScreen || app.networkScreen || (app.reportScreen && !app.recording)) && pressed({ ImGuiKey_Escape, ImGuiKey_GamepadFaceRight }, false))
             {
                 sound::Play(sound::Clip::Click);
                 app.Do(Action::Back);
@@ -991,7 +1172,7 @@ namespace
             }
             else if (app.reportScreen ? !app.message.empty() && !app.recording && (app.messageFocus < 0 || app.focus == app.messageFocus)
                      : app.profileScreen ? !app.message.empty() && app.focus == app.messageFocus
-                                       : !app.message.empty() && (current.action == Action::Install || current.action == Action::ChooseUpdate ||
+                                       : !app.message.empty() && (app.networkScreen || current.action == Action::Install || current.action == Action::ChooseUpdate ||
                                                                   current.action == Action::CheckUpdate || current.action == Action::InstallUpdate || app.messageIsError))
             {
                 frame.text = app.message;
@@ -1005,7 +1186,7 @@ namespace
             if (*update::Current()) frame.corner = std::string(update::Current()) + "   " + frame.corner;
             if (!app.updated.empty()) frame.status = "Updated to " + app.updated + ". " + frame.status;
             frame.hint = app.recording                          ? ""
-                         : app.profileScreen || app.reportScreen || app.graphicsScreen ? "ENTER OR (A) TO CHOOSE, ESC OR (B) TO GO BACK"
+                         : app.profileScreen || app.reportScreen || app.graphicsScreen || app.networkScreen ? "ENTER OR (A) TO CHOOSE, ESC OR (B) TO GO BACK"
                                                                  : "ENTER OR (A) TO CHOOSE";
 
             if (current.action == Action::Fov)
@@ -1092,13 +1273,14 @@ int main(int argc, char** argv)
     // The paths on the command line are the terminal's; everything a player's
     // copy keeps -- game/, saves/ -- is beside the launcher.
     std::error_code ec;
-    fs::path disc, update;
+    fs::path disc, update, installDir;
     const bool upgrade = arguments.size() == 1 && arguments[0] == "--upgrade";
     bool usage = !arguments.empty() && arguments[0] != "--install" && !upgrade;
     for (size_t i = 1; i < arguments.size() && !usage; i++)
     {
         const std::string text = Utf8(arguments[i]);
         if (text == "--update" && i + 1 < arguments.size()) update = fs::absolute(arguments[++i], ec);
+        else if (text == "--install-dir" && i + 1 < arguments.size()) installDir = fs::absolute(arguments[++i], ec);
         else if (text[0] != '-' && disc.empty()) disc = fs::absolute(arguments[i], ec);
         else usage = true;
     }
@@ -1112,11 +1294,17 @@ int main(int argc, char** argv)
     {
         if (usage)
         {
-            std::fprintf(stderr, "usage: %s --install [<disc image or extracted disc folder>] [--update <package or folder>]\n"
+            std::fprintf(stderr, "usage: %s --install [<disc image or extracted disc folder>] [--update <package or folder>] [--install-dir <folder for the game files>]\n"
                                  "       %s --upgrade\n", argv[0], argv[0]);
             return 2;
         }
         if (upgrade) return UpgradeInTerminal();
+        if (!installDir.empty())
+        {
+            std::string error;
+            if (!setup::SetInstallLocation(installDir, error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+            std::printf("Game files go in %s.\n", setup::InstallLocationText().c_str());
+        }
         return InstallInTerminal(disc, update);
     }
     return Window(updated);

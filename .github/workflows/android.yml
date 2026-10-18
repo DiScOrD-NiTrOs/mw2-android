@@ -294,9 +294,9 @@ jobs:
             *)       build=Debug ;;
           esac
           case "${{ inputs.title }}" in
-            campaign)    tasks=("assembleCampaign$build") ;;
-            multiplayer) tasks=("assembleMultiplayer$build") ;;
-            both)        tasks=("assembleCampaign$build" "assembleMultiplayer$build") ;;
+            campaign)    tasks=("assembleCampaignTu0$build") ;;
+            multiplayer) tasks=("assembleMultiplayerTu0$build") ;;
+            both)        tasks=("assembleCampaignTu0$build" "assembleMultiplayerTu0$build") ;;
           esac
           echo "gradle ${tasks[*]}"
           gradle --no-daemon --stacktrace "${tasks[@]}"

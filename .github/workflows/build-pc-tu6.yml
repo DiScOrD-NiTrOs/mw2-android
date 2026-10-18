@@ -1,0 +1,506 @@
+# Builds the PC player release for this fork at title update 6 (TU6): the
+# version mods such as Bot Warfare need. TU6 does NOT interoperate with the
+# disc-version (TU0) builds, Android included: a TU6 copy only plays with
+# TU6 copies. No Steam backend: system-link over LAN.
+#
+# Needs the same two secrets as Build MP APK (both masked in logs):
+#   GAME_ARCHIVE_URL  PLAIN raw URL of the zip with default.xex + default_mp.xex
+#   MW2_ASSETS_TOKEN  fine-grained PAT, Contents read-only on the assets repo
+# mw2/ is removed after the build so no game file can reach an artifact.
+#
+# First run is long (two recompiles + two full builds); ppc/ppc_mp,
+# XenonRecomp and ccache are cached, so re-running after a timeout resumes.
+name: Build PC TU6
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to stamp into the launcher/updater"
+        default: "v0.1.0-alpha.9"
+      upload_release:
+        description: "Attach the archives to that GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_MAXSIZE: 6G
+  CCACHE_COMPILERCHECK: content
+
+jobs:
+  linux:
+    # Ubuntu 22.04 so the binaries ask for glibc 2.35 at most.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make room on the disk
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift || true
+          sudo apt-get clean
+          echo "after:"; df -h / | tail -1
+
+      - name: Install the toolchains and libraries
+        run: |
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 18
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          # SDL3's video, audio, input and dialog backends, and the Vulkan loader.
+          sudo apt-get update
+          sudo apt-get install -y libstdc++-13-dev ninja-build ccache pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev \
+            libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev libdecor-0-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev \
+            libdbus-1-dev libibus-1.0-dev libudev-dev libvulkan-dev python3
+          # Ubuntu 22.04's Vulkan headers predate extensions the renderer asks for.
+          git clone -q --depth 1 --branch v1.3.275 https://github.com/KhronosGroup/Vulkan-Headers.git
+          cmake -S Vulkan-Headers -B Vulkan-Headers/build -G Ninja
+          sudo cmake --install Vulkan-Headers/build
+          rm -rf Vulkan-Headers llvm.sh
+
+      - name: Fetch the game's executables
+        id: fetch
+        env:
+          ARCHIVE_URL: ${{ secrets.GAME_ARCHIVE_URL }}
+          MW2_ASSETS_TOKEN: ${{ secrets.MW2_ASSETS_TOKEN }}
+          HTTP_AUTHORIZATION: Bearer ${{ secrets.MW2_ASSETS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ARCHIVE_URL" ]; then
+            echo "::error::GAME_ARCHIVE_URL secret is empty. See CROSSPLAY.md."
+            exit 1
+          fi
+          if [ -z "${MW2_ASSETS_TOKEN:-}" ]; then
+            echo "::error::MW2_ASSETS_TOKEN secret is empty. See CROSSPLAY.md."
+            exit 1
+          fi
+          case "$ARCHIVE_URL" in
+            *@*) echo "::error::GAME_ARCHIVE_URL must be the PLAIN raw URL; the token goes in MW2_ASSETS_TOKEN."; exit 1 ;;
+          esac
+          echo "::add-mask::$ARCHIVE_URL"
+          python3 tools/fetch_asset.py --into mw2 --github-output \
+            --require default.xex,default_mp.xex "$ARCHIVE_URL"
+          mkdir -p mw2/tu0
+          cp mw2/default.xex mw2/default_mp.xex mw2/tu0/
+          # The patch step below only runs when mw2/*.xex are absent: the
+          # fetched disc copies must NOT sit there or the "TU6" build silently
+          # recompiles unpatched disc bytes. Remove them so xexpatch runs.
+          rm -f mw2/default.xex mw2/default_mp.xex mw2/default.pe mw2/default_mp.pe
+          # Title update 6, from the private assets repo (see the header).
+          curl -sSL -H "Authorization: Bearer $MW2_ASSETS_TOKEN" \
+            "https://raw.githubusercontent.com/CyberLifeYT/mw2-assets/main/title-updates/TU6/TU_10LC20N_0000018000000.00000000001GA" \
+            -o tu6.pkg
+          if [ ! -s tu6.pkg ]; then echo "::error::TU6 package did not download."; exit 1; fi
+          echo "TU6 package: $(du -h tu6.pkg | cut -f1)"
+
+      - name: Restore the recompiled trees (disc tu6)
+        id: ppc_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ppc
+            ppc_mp
+            .xex-sha256
+          key: ppc-tu6-${{ steps.fetch.outputs.assets_key }}-${{ hashFiles('build.sh', 'patches/**', 'config/MW2.toml', 'config/MW2MP.toml', 'tools/genshared.py', 'tools/gen_kernel_stubs.py') }}
+
+      - name: Cache the XenonRecomp build
+        uses: actions/cache@v4
+        with:
+          path: XenonRecomp
+          key: xenonrecomp-${{ hashFiles('build.sh', 'patches/**') }}
+
+      - name: Recompile both executables (disc tu6)
+        if: steps.ppc_cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          VERSION=tu6 RECOMPILE_ONLY=1 TU=$PWD/tu6.pkg TITLE=sp ISO=mw2/game.iso ./build.sh
+          VERSION=tu6 RECOMPILE_ONLY=1 TU=$PWD/tu6.pkg TITLE=mp ISO=mw2/game.iso ./build.sh
+
+      - name: Verify the TU patch applied
+        # Guard: the build must run on patched bytes, never on the disc
+        # copies. Fails fast instead of miscompiling.
+        run: |
+          for x in default default_mp; do
+            disc=$(sha256sum "mw2/tu0/$x.xex" | cut -d' ' -f1)
+            built=$(sha256sum "mw2/$x.xex" | cut -d' ' -f1)
+            echo "$x disc: $disc"
+            echo "$x tu6:  $built"
+            if [ "$disc" = "$built" ]; then
+              echo "::error::$x.xex is byte-identical to the disc: the TU patch did not apply."
+              exit 1
+            fi
+          done
+
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-pc-tu6-linux-${{ github.run_id }}
+          restore-keys: |
+            ccache-pc-tu6-linux-
+
+      - name: Build (sp offline, mp lan)
+        run: |
+          set -euo pipefail
+          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps"
+          VERSION=tu6 TU=$PWD/tu6.pkg TITLE=sp ONLINE=none RELEASE=1 RELEASE_TAG=${{ inputs.release_tag }} BUILD_DIR=out/sp ./build.sh 2>&1 | tee logs-build-sp-tu6.txt
+          VERSION=tu6 TU=$PWD/tu6.pkg TITLE=mp ONLINE=lan RELEASE=1 RELEASE_TAG=${{ inputs.release_tag }} BUILD_DIR=out/mp ./build.sh 2>&1 | tee logs-build-mp-tu6.txt
+          ccache --show-stats || true
+
+      - name: Derive jump-table bounds from the failure
+        # tools/fixbounds.py reads the analyser's errors, the switch tables
+        # and the PE -- all still in the workspace on a failed build -- and
+        # prints the config/*.toml entries that fix them. Addresses only, no
+        # game data, so the output is safe to read in the log.
+        if: failure()
+        run: |
+          for title in sp mp; do
+            case "$title" in
+              sp) tables=config/mw2_switch_tables.toml ;;
+              mp) tables=config/mw2mp_switch_tables.toml ;;
+            esac
+            echo "===== $title ($tables) ====="
+            # The recompiler's log carries the jump-table errors (the
+            # analyser's own log only has its tables); fixbounds derives the
+            # config TOML entries from those, the tables and the PE.
+            if [ -f "$tables" ] && [ -f "logs-recomp-$title-tu6.txt" ]; then
+              MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/fixbounds.py "$tables" "logs-recomp-$title-tu6.txt" || true
+            else
+              echo "missing inputs, skipping"
+            fi
+          done
+
+      - name: Map title.h hooks disc-to-TU6 from the failure        # The TU0 title.h blocks are verified (those builds run); several TU6
+        # addresses are stale for our copies ("use of undeclared identifier
+        # 'sub_XXXXXXXX'"). This matches every TU6 hook against the disc
+        # executable by its code and prints the corrected #defines. Names and
+        # addresses only, no game data.
+        if: failure()
+        run: |
+          python3 tools/map_tu6.py || true
+          # .pdata layouts of both executables, for diffing against the
+          # disc's (tools/pdata_dump.py locally): addresses only. Shows what
+          # the update moved, added or removed around a split function.
+          for title in sp mp; do
+            echo "===== pdata ($title tu6) ====="
+            MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/pdata_dump.py || true
+          done
+          # Changed functions disc-vs-TU6, by content hash: addresses and
+          # short hashes only. Pinpoints what the update moved around a
+          # split function (the full dumps above are the raw material).
+          for title in sp mp; do
+            echo "===== changed functions ($title) ====="
+            if [ "$title" = sp ]; then focus=0x8232D874; else focus=0x8241A84C; fi
+            python3 tools/diff_fns.py "$title" "$focus" || true
+          done
+          # Undeclared goto labels from the failed C++ compile, located in
+          # the executable: the analyser split a function it should not have,
+          # and the addresses around the label place its true bounds
+          # (config/*.toml `functions`). Addresses only, no game data.
+          for title in sp mp; do
+            log="logs-build-$title-tu6.txt"
+            [ -f "$log" ] || continue
+            labels=$(grep -o "loc_[0-9A-Fa-f]*" "$log" 2>/dev/null | sort -u | sed 's/^loc_/0x/' || true)
+            if [ -n "$labels" ]; then
+              echo "===== undeclared labels ($title) ====="
+              # shellcheck disable=SC2086
+              MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/bracket.py $labels || true
+              # Branch structure around each label: what the analyser saw and
+              # where it cut. Same addresses-only rule as above.
+              for label in $labels; do
+                lo=$(printf '0x%X' $(($label - 0x40)))
+                hi=$(printf '0x%X' $(($label + 0x28)))
+                echo "----- flow around $label -----"
+                MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/bracket.py --flow $lo $hi || true
+              done
+              # Jump tables the analyser recorded near the label: a table
+              # dispatching into a loop tail splits it away from its branch.
+              if [ "$title" = sp ]; then tables=config/mw2_switch_tables.toml;
+              else tables=config/mw2mp_switch_tables.toml; fi
+              for label in $labels; do
+                echo "----- tables near $label -----"
+                python3 tools/tables_near.py "$tables" "$label" || true
+              done
+            fi
+          done
+
+      - name: Save the compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-pc-tu6-linux-${{ github.run_id }}
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          rm -rf mw2
+          mkdir -p dist
+          name=mw2-${{ inputs.release_tag }}-linux-tu6-lan
+          mkdir -p $name
+          cp out/sp/mw2 $name/mw2-sp
+          cp out/mp/mw2 $name/mw2-mp
+          cp out/sp/mw2-launcher $name/mw2-launcher
+          strip $name/mw2-sp $name/mw2-mp $name/mw2-launcher
+          cp README.md CROSSPLAY.md LICENSE $name/
+          cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
+          tar czf dist/$name.tar.gz $name
+          echo "glibc needed: $(objdump -T out/mp/mw2 | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pc-linux-tu6
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload to release
+        if: ${{ github.event.inputs.upload_release == true || github.event.inputs.upload_release == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for f in dist/*; do
+            gh release upload "${{ inputs.release_tag }}" "$f" --clobber -R "${{ github.repository }}" || echo "upload skipped for $f"
+          done
+
+  windows:
+    # Cross-compiled on Linux with llvm-mingw.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      LLVM_MINGW_RELEASE: "20260922"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make room on the disk
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift || true
+          sudo apt-get clean
+          echo "after:"; df -h / | tail -1
+
+      - name: Install the toolchains
+        run: |
+          sudo apt-get update
+          # clang-18 builds XenonRecomp, which runs here; llvm-mingw builds the game.
+          sudo apt-get install -y clang-18 lld-18 ninja-build ccache zip python3
+          name=llvm-mingw-$LLVM_MINGW_RELEASE-ucrt-ubuntu-22.04-x86_64
+          wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_RELEASE/$name.tar.xz
+          tar xf $name.tar.xz -C $HOME && rm $name.tar.xz
+          echo "LLVM_MINGW=$HOME/$name" >> "$GITHUB_ENV"
+
+      - name: Fetch the game's executables
+        id: fetch
+        env:
+          ARCHIVE_URL: ${{ secrets.GAME_ARCHIVE_URL }}
+          MW2_ASSETS_TOKEN: ${{ secrets.MW2_ASSETS_TOKEN }}
+          HTTP_AUTHORIZATION: Bearer ${{ secrets.MW2_ASSETS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ARCHIVE_URL" ]; then
+            echo "::error::GAME_ARCHIVE_URL secret is empty. See CROSSPLAY.md."
+            exit 1
+          fi
+          if [ -z "${MW2_ASSETS_TOKEN:-}" ]; then
+            echo "::error::MW2_ASSETS_TOKEN secret is empty. See CROSSPLAY.md."
+            exit 1
+          fi
+          case "$ARCHIVE_URL" in
+            *@*) echo "::error::GAME_ARCHIVE_URL must be the PLAIN raw URL; the token goes in MW2_ASSETS_TOKEN."; exit 1 ;;
+          esac
+          echo "::add-mask::$ARCHIVE_URL"
+          python3 tools/fetch_asset.py --into mw2 --github-output \
+            --require default.xex,default_mp.xex "$ARCHIVE_URL"
+          mkdir -p mw2/tu0
+          cp mw2/default.xex mw2/default_mp.xex mw2/tu0/
+          # The patch step below only runs when mw2/*.xex are absent: the
+          # fetched disc copies must NOT sit there or the "TU6" build silently
+          # recompiles unpatched disc bytes. Remove them so xexpatch runs.
+          rm -f mw2/default.xex mw2/default_mp.xex mw2/default.pe mw2/default_mp.pe
+          # Title update 6, from the private assets repo (see the header).
+          curl -sSL -H "Authorization: Bearer $MW2_ASSETS_TOKEN" \
+            "https://raw.githubusercontent.com/CyberLifeYT/mw2-assets/main/title-updates/TU6/TU_10LC20N_0000018000000.00000000001GA" \
+            -o tu6.pkg
+          if [ ! -s tu6.pkg ]; then echo "::error::TU6 package did not download."; exit 1; fi
+          echo "TU6 package: $(du -h tu6.pkg | cut -f1)"
+
+      - name: Restore the recompiled trees (disc tu6)
+        id: ppc_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ppc
+            ppc_mp
+            .xex-sha256
+          key: ppc-tu6-${{ steps.fetch.outputs.assets_key }}-${{ hashFiles('build.sh', 'patches/**', 'config/MW2.toml', 'config/MW2MP.toml', 'tools/genshared.py', 'tools/gen_kernel_stubs.py') }}
+
+      - name: Cache the XenonRecomp build
+        uses: actions/cache@v4
+        with:
+          path: XenonRecomp
+          key: xenonrecomp-${{ hashFiles('build.sh', 'patches/**') }}
+
+      - name: Recompile both executables (disc tu6)
+        if: steps.ppc_cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          VERSION=tu6 RECOMPILE_ONLY=1 TU=$PWD/tu6.pkg TITLE=sp ISO=mw2/game.iso ./build.sh
+          VERSION=tu6 RECOMPILE_ONLY=1 TU=$PWD/tu6.pkg TITLE=mp ISO=mw2/game.iso ./build.sh
+
+      - name: Verify the TU patch applied
+        # Guard: the build must run on patched bytes, never on the disc
+        # copies. Fails fast instead of miscompiling.
+        run: |
+          for x in default default_mp; do
+            disc=$(sha256sum "mw2/tu0/$x.xex" | cut -d' ' -f1)
+            built=$(sha256sum "mw2/$x.xex" | cut -d' ' -f1)
+            echo "$x disc: $disc"
+            echo "$x tu6:  $built"
+            if [ "$disc" = "$built" ]; then
+              echo "::error::$x.xex is byte-identical to the disc: the TU patch did not apply."
+              exit 1
+            fi
+          done
+
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-pc-tu6-windows-${{ github.run_id }}
+          restore-keys: |
+            ccache-pc-tu6-windows-
+
+      - name: Build (sp offline, mp lan)
+        run: |
+          set -euo pipefail
+          export CMAKE_EXTRA="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFETCHCONTENT_BASE_DIR=$PWD/out/_deps"
+          WINDOWS=1 VERSION=tu6 TU=$PWD/tu6.pkg TITLE=sp ONLINE=none RELEASE=1 RELEASE_TAG=${{ inputs.release_tag }} BUILD_DIR=out/sp ./build.sh 2>&1 | tee logs-build-sp-tu6.txt
+          WINDOWS=1 VERSION=tu6 TU=$PWD/tu6.pkg TITLE=mp ONLINE=lan RELEASE=1 RELEASE_TAG=${{ inputs.release_tag }} BUILD_DIR=out/mp ./build.sh 2>&1 | tee logs-build-mp-tu6.txt
+          ccache --show-stats || true
+
+      - name: Derive jump-table bounds from the failure
+        # tools/fixbounds.py reads the analyser's errors, the switch tables
+        # and the PE -- all still in the workspace on a failed build -- and
+        # prints the config/*.toml entries that fix them. Addresses only, no
+        # game data, so the output is safe to read in the log.
+        if: failure()
+        run: |
+          for title in sp mp; do
+            case "$title" in
+              sp) tables=config/mw2_switch_tables.toml ;;
+              mp) tables=config/mw2mp_switch_tables.toml ;;
+            esac
+            echo "===== $title ($tables) ====="
+            # The recompiler's log carries the jump-table errors (the
+            # analyser's own log only has its tables); fixbounds derives the
+            # config TOML entries from those, the tables and the PE.
+            if [ -f "$tables" ] && [ -f "logs-recomp-$title-tu6.txt" ]; then
+              MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/fixbounds.py "$tables" "logs-recomp-$title-tu6.txt" || true
+            else
+              echo "missing inputs, skipping"
+            fi
+          done
+
+      - name: Map title.h hooks disc-to-TU6 from the failure        # The TU0 title.h blocks are verified (those builds run); several TU6
+        # addresses are stale for our copies ("use of undeclared identifier
+        # 'sub_XXXXXXXX'"). This matches every TU6 hook against the disc
+        # executable by its code and prints the corrected #defines. Names and
+        # addresses only, no game data.
+        if: failure()
+        run: |
+          python3 tools/map_tu6.py || true
+          # .pdata layouts of both executables, for diffing against the
+          # disc's (tools/pdata_dump.py locally): addresses only. Shows what
+          # the update moved, added or removed around a split function.
+          for title in sp mp; do
+            echo "===== pdata ($title tu6) ====="
+            MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/pdata_dump.py || true
+          done
+          # Changed functions disc-vs-TU6, by content hash: addresses and
+          # short hashes only. Pinpoints what the update moved around a
+          # split function (the full dumps above are the raw material).
+          for title in sp mp; do
+            echo "===== changed functions ($title) ====="
+            if [ "$title" = sp ]; then focus=0x8232D874; else focus=0x8241A84C; fi
+            python3 tools/diff_fns.py "$title" "$focus" || true
+          done
+          # Undeclared goto labels from the failed C++ compile, located in
+          # the executable: the analyser split a function it should not have,
+          # and the addresses around the label place its true bounds
+          # (config/*.toml `functions`). Addresses only, no game data.
+          for title in sp mp; do
+            log="logs-build-$title-tu6.txt"
+            [ -f "$log" ] || continue
+            labels=$(grep -o "loc_[0-9A-Fa-f]*" "$log" 2>/dev/null | sort -u | sed 's/^loc_/0x/' || true)
+            if [ -n "$labels" ]; then
+              echo "===== undeclared labels ($title) ====="
+              # shellcheck disable=SC2086
+              MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/bracket.py $labels || true
+              # Branch structure around each label: what the analyser saw and
+              # where it cut. Same addresses-only rule as above.
+              for label in $labels; do
+                lo=$(printf '0x%X' $(($label - 0x40)))
+                hi=$(printf '0x%X' $(($label + 0x28)))
+                echo "----- flow around $label -----"
+                MW2_TITLE=$title MW2_VERSION=tu6 python3 tools/bracket.py --flow $lo $hi || true
+              done
+              # Jump tables the analyser recorded near the label: a table
+              # dispatching into a loop tail splits it away from its branch.
+              if [ "$title" = sp ]; then tables=config/mw2_switch_tables.toml;
+              else tables=config/mw2mp_switch_tables.toml; fi
+              for label in $labels; do
+                echo "----- tables near $label -----"
+                python3 tools/tables_near.py "$tables" "$label" || true
+              done
+            fi
+          done
+
+      - name: Save the compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-pc-tu6-windows-${{ github.run_id }}
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          rm -rf mw2
+          mkdir -p dist
+          name=mw2-${{ inputs.release_tag }}-windows-tu6-lan
+          mkdir -p $name
+          cp out/sp/mw2.exe $name/mw2-sp.exe
+          cp out/mp/mw2.exe $name/mw2-mp.exe
+          cp out/sp/mw2-launcher.exe $name/mw2-launcher.exe
+          $LLVM_MINGW/bin/llvm-strip $name/mw2-sp.exe $name/mw2-mp.exe $name/mw2-launcher.exe
+          cp README.md CROSSPLAY.md LICENSE $name/
+          cp third_party/fonts/OFL.txt $name/FONT-LICENSE.txt
+          zip -qr dist/$name.zip $name
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pc-windows-tu6
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload to release
+        if: ${{ github.event.inputs.upload_release == true || github.event.inputs.upload_release == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for f in dist/*; do
+            gh release upload "${{ inputs.release_tag }}" "$f" --clobber -R "${{ github.repository }}" || echo "upload skipped for $f"
+          done

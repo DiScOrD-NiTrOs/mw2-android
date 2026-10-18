@@ -10,6 +10,8 @@
 // Who the player is, to the title, is the profile at the first controller
 // (signin.h), plus this copy's port slot, so a second copy on one machine is a
 // second player. MW2_NAME is another name for him than the profile's.
+// MW2_LAN_IFACE pins the announced adapter by name or address substring;
+// without it the first connection up is announced.
 //
 // Xbox LIVE lobbies: every copy says who it is and what can be joined, once a
 // second, to everyone on the shared port. MW2_LAN_JOIN=<name> joins that
@@ -29,6 +31,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <cstdlib>
 
 #ifdef _WIN32
@@ -100,27 +103,54 @@ namespace
     constexpr uint32_t kMagic = 0x4D57324C;   // "MW2L"
 
     // Who a copy is and what can be joined: to everyone as presence, or to one
-    // player as an invitation.
+    // player as an invitation. Slots and nonce travel too, so a system-link
+    // invitation carries everything the title's own `connect` line needs
+    // (XNADDR, key, id, slots, nonce) and can join without the Live path.
+    //
+    // `tu` is the game version this copy runs (kPresenceTu0/Tu6 below): TU0
+    // plays only with TU0, TU6 only with TU6. It rides in what was padding,
+    // so the struct keeps its size and older builds -- which send zero --
+    // still parse it; zero reads as "unknown, predates versions".
     struct Presence
     {
         uint32_t magic;
         uint32_t instance;
         uint8_t kind;          // kAnnounce or kInvite
         uint8_t joinable;      // `session` holds something
-        uint8_t pad[2];
+        uint8_t tu;            // kPresenceTu0, kPresenceTu6, or 0 unknown
+        uint8_t pad;
         uint64_t account;      // big-endian
         char name[32];
         uint8_t session[online::kSessionInfoSize];
+        uint8_t publicSlots;
+        uint8_t privateSlots;
+        uint8_t nonce[8];
     };
     constexpr uint32_t kPresenceMagic = 0x4D573250;   // "MW2P"
     constexpr uint8_t kAnnounce = 0, kInvite = 1;
+    constexpr uint8_t kPresenceTu0 = 1, kPresenceTu6 = 2;
+#ifdef MW2_VERSION_TU0
+    constexpr uint8_t kOwnTu = kPresenceTu0;
+    constexpr const char* kOwnTuName = "TU0";
+#else
+    constexpr uint8_t kOwnTu = kPresenceTu6;
+    constexpr const char* kOwnTuName = "TU6";
+#endif
+    constexpr const char* TuName(uint8_t tu)
+    {
+        return tu == kPresenceTu6 ? "TU6" : tu == kPresenceTu0 ? "TU0" : "an older build";
+    }
     constexpr auto kAnnounceEvery = std::chrono::seconds(1);
 
     struct Peer
     {
         uint64_t id = 0, account = 0;
         bool joinable = false;
+        uint8_t tu = 0;        // the game version they run, 0 when unknown
+        bool warnedTu = false; // told once that their version differs
         uint8_t session[online::kSessionInfoSize]{};
+        uint8_t publicSlots = 0, privateSlots = 0;
+        uint8_t nonce[8]{};
     };
     constexpr size_t kLargest = 64 * 1024;
     constexpr size_t kQueued = 512;
@@ -129,6 +159,35 @@ namespace
     {
         return (uint64_t(ntohl(address.sin_addr.s_addr)) << 16) | ntohs(address.sin_port);
     }
+
+    // The title's own `connect` line for a heard system-link session, in the
+    // exact form its server browser issues (xam.cpp's AdvertiseHosted): the
+    // guest then joins the way picking the server would, with no Live
+    // sign-in or accept flag needed.
+    std::string HexBytes(const uint8_t* p, size_t n)
+    {
+        static const char* digits = "0123456789abcdef";
+        std::string text;
+        text.reserve(2 * n);
+        for (size_t i = 0; i < n; i++)
+        {
+            text += digits[p[i] >> 4];
+            text += digits[p[i] & 15];
+        }
+        return text;
+    }
+
+    std::string ConnectLine(const Peer& peer)
+    {
+        return "connect " + HexBytes(peer.session + 8, 36) + " " +
+               HexBytes(peer.session + 44, 16) + " " + HexBytes(peer.session, 8) + " " +
+               std::to_string(peer.publicSlots) + " " + std::to_string(peer.privateSlots) + " " +
+               HexBytes(peer.nonce, 8);
+    }
+
+    // A Live session id carries 0x80 in its top bits; a system-link one does
+    // not. Only the wire format both ends of this build speak is trusted.
+    bool IsLiveSession(const Peer& peer) { return (peer.session[0] & 0x80) != 0; }
 
     sockaddr_in AddressOf(uint64_t id)
     {
@@ -140,8 +199,11 @@ namespace
     }
 
     // The network connections that are up, the loopback aside, in the order
-    // the system lists them.
-    struct Adapter { std::string name; uint32_t address; };
+    // the system lists them. On Android the WiFi interfaces come first: the
+    // system lists cellular (rmnet) before wlan, and announcing a cellular
+    // address, or broadcasting by the default route, would send discovery to
+    // the carrier where it dies instead of to the LAN the players share.
+    struct Adapter { std::string name; uint32_t address; uint32_t netmask; };
     std::vector<Adapter> Adapters()
     {
         std::vector<Adapter> found;
@@ -166,8 +228,10 @@ namespace
             for (auto* unicast = at->FirstUnicastAddress; unicast; unicast = unicast->Next)
             {
                 const auto* address = reinterpret_cast<const sockaddr_in*>(unicast->Address.lpSockaddr);
-                if (address->sin_family == AF_INET)
-                    found.push_back({ name, ntohl(address->sin_addr.s_addr) });
+                if (address->sin_family != AF_INET) continue;
+                const ULONG prefix = unicast->OnLinkPrefixLength > 32 ? 32 : unicast->OnLinkPrefixLength;
+                const uint32_t mask = prefix == 0 ? 0 : (0xFFFFFFFFu << (32 - prefix));
+                found.push_back({ name, ntohl(address->sin_addr.s_addr), mask });
             }
         }
 #else
@@ -177,9 +241,17 @@ namespace
         {
             if (!at->ifa_addr || at->ifa_addr->sa_family != AF_INET) continue;
             if (!(at->ifa_flags & IFF_UP) || (at->ifa_flags & IFF_LOOPBACK)) continue;
-            found.push_back({ at->ifa_name, ntohl(reinterpret_cast<sockaddr_in*>(at->ifa_addr)->sin_addr.s_addr) });
+            uint32_t mask = 0;
+            if (at->ifa_netmask && at->ifa_netmask->sa_family == AF_INET)
+                mask = ntohl(reinterpret_cast<sockaddr_in*>(at->ifa_netmask)->sin_addr.s_addr);
+            found.push_back({ at->ifa_name, ntohl(reinterpret_cast<sockaddr_in*>(at->ifa_addr)->sin_addr.s_addr), mask });
         }
         freeifaddrs(list);
+#ifdef MW2_ANDROID
+        std::stable_partition(found.begin(), found.end(), [](const Adapter& a) {
+            return a.name.compare(0, 4, "wlan") == 0;
+        });
+#endif
 #endif
         return found;
     }
@@ -188,6 +260,11 @@ namespace
     // up and not the loopback, or the loopback when there is none. The log
     // names them all: with more than one, the first may not be the one the
     // other players are on.
+    //
+    // MW2_LAN_IFACE pins one: any adapter whose name or address contains the
+    // value ("WiFi", "wlan0", "192.168.1"). Matters with several up at once --
+    // a VPN adapter first means sessions invite to an address only VPN peers
+    // reach, and WiFi-only guests then loop on "attempt #N" forever.
     uint32_t OwnAddress()
     {
         const std::vector<Adapter> adapters = Adapters();
@@ -202,6 +279,25 @@ namespace
         }
         if (adapters.empty()) LOGI("online: no network connection is up; lan stays on this machine");
         else LOGI("online: network connections: %s; announcing the first", list.c_str());
+        const char* pinned = env::Text("MW2_LAN_IFACE");
+        if (pinned && *pinned)
+        {
+            for (const Adapter& adapter : adapters)
+            {
+                in_addr address;
+                address.s_addr = htonl(adapter.address);
+                char text[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &address, text, sizeof text);
+                if (adapter.name.find(pinned) != std::string::npos ||
+                    std::string(text).find(pinned) != std::string::npos)
+                {
+                    LOGI("online: MW2_LAN_IFACE=%s, announcing %s %s", pinned,
+                         adapter.name.c_str(), text);
+                    return adapter.address;
+                }
+            }
+            LOGW("online: MW2_LAN_IFACE=%s matches no connection, announcing the first", pinned);
+        }
         return adapters.empty() ? uint32_t(INADDR_LOOPBACK) : adapters.front().address;
     }
 
@@ -268,8 +364,35 @@ namespace
             accept_ = env::Flag("MW2_LAN_ACCEPT");
             char text[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &bound.sin_addr, text, sizeof text);
-            LOGI("online: lan as \"%s\" at %s:%u, broadcasts on %u", name_.c_str(), text,
+            LOGI("online: lan as \"%s\" (%s) at %s:%u, broadcasts on %u", name_.c_str(), kOwnTuName, text,
                  ntohs(bound.sin_port), sharedPort_);
+            // Discovery also goes to every connected subnet's broadcast
+            // address: a limited broadcast (255.255.255.255) is filtered on
+            // some routers and hotspots, while the subnet's own still passes.
+            {
+                std::string subnets;
+                for (const Adapter& adapter : Adapters())
+                {
+                    if (adapter.netmask == 0 || adapter.netmask == 0xFFFFFFFFu) continue;
+                    const uint32_t target = adapter.address | ~adapter.netmask;
+                    if (target == adapter.address || target == INADDR_BROADCAST) continue;
+                    sockaddr_in to{};
+                    to.sin_family = AF_INET;
+                    to.sin_addr.s_addr = htonl(target);
+                    to.sin_port = htons(sharedPort_);
+                    bool dup = false;
+                    for (const sockaddr_in& have : broadcasts_)
+                        dup = dup || have.sin_addr.s_addr == to.sin_addr.s_addr;
+                    if (dup) continue;
+                    broadcasts_.push_back(to);
+                    in_addr bcast;
+                    bcast.s_addr = to.sin_addr.s_addr;
+                    char btext[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &bcast, btext, sizeof btext);
+                    subnets += (subnets.empty() ? "" : ", ") + std::string(btext);
+                }
+                if (!subnets.empty()) LOGI("online: lan also announces to %s", subnets.c_str());
+            }
             return true;
         }
 
@@ -292,7 +415,10 @@ namespace
             everyone.sin_family = AF_INET;
             everyone.sin_addr.s_addr = htonl(INADDR_BROADCAST);
             everyone.sin_port = htons(sharedPort_);
-            return SendTo(everyone, fromPort, toPort, bytes, size);
+            bool ok = SendTo(everyone, fromPort, toPort, bytes, size);
+            for (const sockaddr_in& subnet : broadcasts_)
+                ok = SendTo(subnet, fromPort, toPort, bytes, size) && ok;
+            return ok;
         }
 
         bool Receive(uint16_t port, online::Datagram& out) override
@@ -309,6 +435,41 @@ namespace
 
         bool Lobbies() override { return true; }
 
+        // Diagnostics for the app's HUD: how many copies this one hears.
+        size_t PeerCount() override
+        {
+            std::lock_guard g(lock_);
+            return peers_.size();
+        }
+
+        std::string PeerNames() override
+        {
+            std::lock_guard g(lock_);
+            std::string names;
+            for (const auto& [name, peer] : peers_)
+                if (peer.joinable) { names += name; names += '\n'; }
+            return names;
+        }
+
+        bool JoinPeer(const std::string& name) override
+        {
+            std::lock_guard g(lock_);
+            auto it = peers_.find(name);
+            if (it == peers_.end() || !it->second.joinable) return false;
+            Peer& peer = it->second;
+            if (!IsLiveSession(peer))
+            {
+                LOGI("online: joining %s's system-link game directly", name.c_str());
+                joins_.push_back(ConnectLine(peer));
+            }
+            else
+            {
+                LOGI("online: accepting %s's invitation", name.c_str());
+                invites_.push_back(InviteFrom(peer, true));
+            }
+            return true;
+        }
+
         void SetJoinable(const online::Joinable* joinable) override
         {
             std::lock_guard g(lock_);
@@ -324,19 +485,38 @@ namespace
             Drain(shared_);
             const auto now = std::chrono::steady_clock::now();
             if (now - announced_ >= kAnnounceEvery) AnnounceLocked();
+            if (peers_.size() != loggedPeers_)
+            {
+                loggedPeers_ = peers_.size();
+                LOGI("online: lan sees %zu player(s) on the network", loggedPeers_);
+            }
             if (!join_.empty())
             {
                 auto it = peers_.find(join_);
                 if (it != peers_.end() && it->second.joinable)
                 {
                     LOGI("online: lan joins %s", join_.c_str());
-                    invites_.push_back(InviteFrom(it->second, false));
+                    if (!IsLiveSession(it->second))
+                        joins_.push_back(ConnectLine(it->second));
+                    else
+                        invites_.push_back(InviteFrom(it->second, false));
                     join_.clear();
                 }
             }
             if (invites_.empty()) return false;
             out = invites_.front();
             invites_.pop_front();
+            return true;
+        }
+
+        // System-link joins queued above, as the title's own `connect` lines.
+        // service.cpp types the system-link menu first, then the line.
+        bool NextJoin(std::string& connect) override
+        {
+            std::lock_guard g(lock_);
+            if (joins_.empty()) return false;
+            connect = std::move(joins_.front());
+            joins_.pop_front();
             return true;
         }
 
@@ -370,9 +550,17 @@ namespace
             presence.instance = instance_;
             presence.kind = kind;
             presence.joinable = hasJoinable_;
+            presence.tu = kOwnTu;
+            presence.pad = 0;
             presence.account = BigEndian64(Account());
             std::snprintf(presence.name, sizeof presence.name, "%s", name_.c_str());
-            if (hasJoinable_) std::memcpy(presence.session, joinable_.session, sizeof presence.session);
+            if (hasJoinable_)
+            {
+                std::memcpy(presence.session, joinable_.session, sizeof presence.session);
+                presence.publicSlots = joinable_.publicSlots;
+                presence.privateSlots = joinable_.privateSlots;
+                std::memcpy(presence.nonce, joinable_.nonce, sizeof presence.nonce);
+            }
             return presence;
         }
 
@@ -385,6 +573,8 @@ namespace
             everyone.sin_addr.s_addr = htonl(INADDR_BROADCAST);
             everyone.sin_port = htons(sharedPort_);
             SendDatagram(own_, &presence, sizeof presence, everyone);
+            for (const sockaddr_in& subnet : broadcasts_)
+                SendDatagram(own_, &presence, sizeof presence, subnet);
         }
 
         void Heard(const sockaddr_in& from, const Presence& presence)
@@ -398,9 +588,26 @@ namespace
                 if (ch >= 32 && ch < 127) name.push_back(static_cast<char>(ch));
             }
             if (name.empty()) name = "Player";
+            const bool fresh = peers_.find(name) == peers_.end();
             Peer& peer = peers_[name];
+            if (fresh)
+            {
+                char text[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &from.sin_addr, text, sizeof text);
+                LOGI("online: lan discovered \"%s\" at %s:%u", name.c_str(), text, ntohs(from.sin_port));
+            }
             peer.id = IdOf(from);
             peer.account = BigEndian64(presence.account);
+            peer.publicSlots = presence.publicSlots;
+            peer.privateSlots = presence.privateSlots;
+            std::memcpy(peer.nonce, presence.nonce, sizeof peer.nonce);
+            if (presence.tu != 0 && presence.tu != kOwnTu && !peer.warnedTu)
+            {
+                peer.warnedTu = true;
+                LOGW("online: \"%s\" runs %s and this copy runs %s: versions never interoperate, "
+                     "match them before joining", name.c_str(), TuName(presence.tu), kOwnTuName);
+            }
+            peer.tu = presence.tu;
             if (peer.account == Account() && !warned_)
             {
                 warned_ = true;
@@ -410,6 +617,16 @@ namespace
             peer.joinable = presence.joinable;
             std::memcpy(peer.session, presence.session, sizeof peer.session);
             if (presence.kind != kInvite || !peer.joinable) return;
+            // A system-link invitation joins straight through the title's own
+            // `connect` line -- the way picking the server would -- with no
+            // Live sign-in or accept flag needed. A Live one keeps the
+            // invitation path below, which the title answers in its Live menu.
+            if (!IsLiveSession(peer))
+            {
+                LOGI("online: joining %s's system-link game directly", name.c_str());
+                joins_.push_back(ConnectLine(peer));
+                return;
+            }
             if (accept_)
             {
                 LOGI("online: lan accepts %s's invitation", name.c_str());
@@ -477,12 +694,15 @@ namespace
         std::map<uint16_t, std::deque<online::Datagram>> waiting_;
 
         std::map<std::string, Peer> peers_;   // by name
+        size_t loggedPeers_ = 0;              // last count told to the log
+        std::vector<sockaddr_in> broadcasts_; // subnet broadcasts, beside 255.255.255.255
         bool hasJoinable_ = false;
         online::Joinable joinable_;
         std::chrono::steady_clock::time_point announced_{};
         std::string join_;                     // MW2_LAN_JOIN, until joined
         bool accept_ = false;                  // MW2_LAN_ACCEPT
-        std::deque<online::Invite> invites_;
+        std::deque<online::Invite> invites_;   // Live invitations, accepted above
+        std::deque<std::string> joins_;        // system-link `connect` lines, typed by Frame
     };
 }
 

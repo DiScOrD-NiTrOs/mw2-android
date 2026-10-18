@@ -143,6 +143,11 @@ class Prefs(context: Context) {
         get() = store.getString(KEY_LAST_BROWSED, "") ?: ""
         set(value) = store.edit().putString(KEY_LAST_BROWSED, value).apply()
 
+    /** The update this phone was told about and skipped, by tag. */
+    var seenUpdateTag: String
+        get() = store.getString(KEY_UPDATE_TAG, "") ?: ""
+        set(value) = store.edit().putString(KEY_UPDATE_TAG, value).apply()
+
     /** Shown once, the first time the player opens the app. */
     var seenWelcome: Boolean
         get() = store.getBoolean(KEY_WELCOME, false)
@@ -151,6 +156,45 @@ class Prefs(context: Context) {
     var autoLaunch: Boolean
         get() = store.getBoolean(KEY_AUTO_LAUNCH, true)
         set(value) = store.edit().putBoolean(KEY_AUTO_LAUNCH, value).apply()
+
+    /**
+     * The split-screen heat warning, shown once when starting the game with a
+     * physical controller attached (player 2). Extra viewports cost frames
+     * and the phone gets hot; nobody needs telling twice.
+     */
+    var seenPadWarning: Boolean
+        get() = store.getBoolean(KEY_PAD_WARNING, false)
+        set(value) = store.edit().putBoolean(KEY_PAD_WARNING, value).apply()
+
+    /**
+     * Compile every recorded pipeline synchronously at boot instead of the
+     * small instant-boot budget (MW2_SHADER_PREWARM_ALL). Boot takes minutes
+     * on a cold cache but there is no warmup debt left afterwards.
+     */
+    var prewarmAllShaders: Boolean
+        get() = store.getBoolean(KEY_PREWARM_ALL, false)
+        set(value) = store.edit().putBoolean(KEY_PREWARM_ALL, value).apply()
+
+    /**
+     * The name other network players see (MW2_NAME). Empty means the
+     * profile's name, which on a fresh phone is "Player 1".
+     */
+    var playerName: String
+        get() = store.getString(KEY_PLAYER_NAME, "") ?: ""
+        set(value) = store.edit().putString(KEY_PLAYER_NAME, value.take(15)).apply()
+
+    /** Accept LAN lobby invitations automatically (MW2_LAN_ACCEPT). */
+    var lanAccept: Boolean
+        get() = store.getBoolean(KEY_LAN_ACCEPT, false)
+        set(value) = store.edit().putBoolean(KEY_LAN_ACCEPT, value).apply()
+
+    /**
+     * Announced network adapter (MW2_LAN_IFACE): name or address piece.
+     * Empty means the first connection up. For VPN + WiFi at once.
+     */
+    var lanIface: String
+        get() = store.getString(KEY_LAN_IFACE, "") ?: ""
+        set(value) = store.edit().putString(KEY_LAN_IFACE, value).apply()
 
     companion object {
         private const val KEY_RESOLUTION = "resolutionScale"
@@ -175,5 +219,11 @@ class Prefs(context: Context) {
         private const val KEY_LAST_BROWSED = "lastBrowsed"
         private const val KEY_WELCOME = "seenWelcome"
         private const val KEY_AUTO_LAUNCH = "autoLaunch"
+        private const val KEY_UPDATE_TAG = "seenUpdateTag"
+        private const val KEY_PAD_WARNING = "seenPadWarning"
+        private const val KEY_PREWARM_ALL = "prewarmAllShaders"
+        private const val KEY_PLAYER_NAME = "playerName"
+        private const val KEY_LAN_ACCEPT = "lanAccept"
+        private const val KEY_LAN_IFACE = "lanIface"
     }
 }
