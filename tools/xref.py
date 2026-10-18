@@ -45,4 +45,4 @@ if __name__=="__main__":
     for v in sorted(r):
         print(f"0x{v:08X}:")
         for site,own in r[v]:
-            print(f"    site 0x{site:08X}  in function {('sub_%08X'%own) if own else '(leaf/unknown)'}")
+            print(f"    site 0x{site:08X}  in function {title.label(own) if own else '(leaf/unknown)'}")

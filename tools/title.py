@@ -21,9 +21,11 @@ BASE = 0x82000000
 
 TITLES = {
     "sp": dict(xex="mw2/default.xex", image="mw2/default.pe", ppc="ppc",
-               toml="config/MW2.toml", tables="config/mw2_switch_tables.toml", build="build"),
+               toml="config/MW2.toml", tables="config/mw2_switch_tables.toml", build="build",
+               syms="config/mw2_symbols.txt"),
     "mp": dict(xex="mw2/default_mp.xex", image="mw2/default_mp.pe", ppc="ppc_mp",
-               toml="config/MW2MP.toml", tables="config/mw2mp_switch_tables.toml", build="build-mp"),
+               toml="config/MW2MP.toml", tables="config/mw2mp_switch_tables.toml", build="build-mp",
+               syms="config/mw2mp_symbols.txt"),
 }
 
 VERSIONS = ("tu6", "tu0")
@@ -36,7 +38,8 @@ if VERSION != "tu6":
                          ppc=f"{t['ppc']}_{VERSION}",
                          toml=t["toml"].replace(".toml", f".{VERSION}.toml"),
                          tables=t["tables"].replace(".toml", f".{VERSION}.toml"),
-                         build=f"{t['build']}-{VERSION}")
+                         build=f"{t['build']}-{VERSION}",
+                         syms=t["syms"].replace(".txt", f".{VERSION}.txt"))
               for name, t in TITLES.items()}
 
 NAME = os.environ.get("MW2_TITLE", "sp")
@@ -50,11 +53,70 @@ PPC = os.path.join(ROOT, _t["ppc"])
 TOML = os.path.join(ROOT, _t["toml"])
 TABLES = os.path.join(ROOT, _t["tables"])
 BUILD = os.path.join(ROOT, _t["build"])
+SYMBOLS = os.path.join(ROOT, _t["syms"])
 
 
 def ppc(name):
     """A file in the title's recompiled-output directory."""
     return os.path.join(PPC, name)
+
+
+_syms = None
+_syms_by_name = None
+
+
+def _load_symbols():
+    """{address: name} from the title's symbol map, a hand-maintained sidecar
+    that names functions the recompiler only knows as sub_<ADDR>. One entry per
+    line, `ADDR  name` (ADDR hex, 0x optional); blank lines and # comments are
+    ignored. Missing file -> no names. The recompiled C++ is generated and keyed
+    by address, so names live here, not in it."""
+    global _syms, _syms_by_name
+    if _syms is not None:
+        return _syms
+    _syms, _syms_by_name = {}, {}
+    try:
+        lines = open(SYMBOLS).read().splitlines()
+    except FileNotFoundError:
+        return _syms
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.replace("=", " ").split()
+        if len(parts) < 2:
+            continue
+        try:
+            addr = int(parts[0], 16)
+        except ValueError:
+            continue
+        name = parts[1]
+        _syms[addr] = name
+        _syms_by_name[name] = addr
+    return _syms
+
+
+def symbols():
+    """{address: name} for this title (see _load_symbols)."""
+    return dict(_load_symbols())
+
+
+def symname(addr):
+    """The name mapped to a guest address, or None."""
+    return _load_symbols().get(addr)
+
+
+def symaddr(name):
+    """The guest address of a named symbol, or None."""
+    _load_symbols()
+    return _syms_by_name.get(name)
+
+
+def label(addr):
+    """`sub_XXXXXXXX` for a guest address, with ` (name)` appended when known --
+    the way the tools print a function."""
+    name = symname(addr)
+    return f"sub_{addr:08X}" + (f" ({name})" if name else "")
 
 
 def image():

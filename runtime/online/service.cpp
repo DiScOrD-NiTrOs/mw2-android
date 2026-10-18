@@ -68,6 +68,34 @@ namespace
         "exec default_720p.cfg", "exec dvar_defaults.cfg", "xrequiresignin",
     };
     constexpr const char* kUseLiveStats = "set useonlinestats 1";
+
+    // Whether a line a service hands over is the one a host advertises
+    // (kernel's AdvertiseHosted): "connect", the XNADDR, key and session id in
+    // hex, the two slot counts, the nonce in hex, a space between each and
+    // nothing else. The line goes to the title's console, which runs whatever
+    // follows a ';' or a newline as a command of its own, and on Steam it is
+    // lobby data the lobby's owner wrote: anything of another shape is refused.
+    bool IsConnectLine(const std::string& line)
+    {
+        // hex digits wanted per token; 0 is a decimal number of up to ten digits
+        constexpr size_t kTokens[] = { 72, 32, 16, 0, 0, 16 };
+        constexpr char kCommand[] = "connect";
+        if (line.compare(0, sizeof kCommand - 1, kCommand) != 0) return false;
+        size_t at = sizeof kCommand - 1;
+        for (const size_t hex : kTokens)
+        {
+            if (at >= line.size() || line[at++] != ' ') return false;
+            size_t digits = 0;
+            for (; at < line.size() && line[at] != ' '; at++, digits++)
+            {
+                const char c = line[at];
+                const bool decimal = c >= '0' && c <= '9';
+                if (!decimal && !(hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))) return false;
+            }
+            if (hex ? digits != hex : (digits < 1 || digits > 10)) return false;
+        }
+        return at == line.size();
+    }
 }
 
 void online::Frame()
@@ -82,6 +110,11 @@ void online::Frame()
     }
     std::string connect;
     if (!service->NextJoin(connect)) return;
+    if (!IsConnectLine(connect))
+    {
+        LOGW("online: a friend's game was advertised with a line that is not a connect command; not joining it");
+        return;
+    }
     LOGI("online: joining a friend's game");
     if (Live()) console::RunNow(kUseLiveStats);
     for (const char* command : kSystemLinkMenu) console::RunNow(command);

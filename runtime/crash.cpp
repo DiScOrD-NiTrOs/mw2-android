@@ -151,13 +151,6 @@ namespace
         // own invariants broke, not the runtime crashing.
         if (sig == SIGTRAP)
             std::fprintf(stderr, "[E] -> a guest trap instruction: an assert inside the title fired\n");
-        // PowerPC's divide does not fault; the title's compiler puts a trap
-        // beside it (twllei rX,0) that the recompiler drops, so a zero divisor
-        // reaches the host's divide instead. On the console that trap fires:
-        // the zero is the bug, not the divide.
-        if (sig == SIGFPE)
-            std::fprintf(stderr, "[E] -> an integer divide by zero in guest code, which the title's own"
-                                 " trap would have stopped on the console\n");
         if (base && addr >= (void*)base && addr < (void*)(base + 0x100000000ull))
         {
             uint64_t g = uint64_t((uint8_t*)addr - base);

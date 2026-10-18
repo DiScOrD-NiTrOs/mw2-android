@@ -1,0 +1,519 @@
+# Analyst symbol map for the multiplayer image (default_mp.xex, TU6).
+#
+# The recompiled C++ in ppc_mp/ is generated and keyed by address, so it only
+# knows functions as sub_<ADDR>. This sidecar gives them readable names for the
+# analysis tools (tools/xref.py and tools/callgraph.py, through tools/title.py's
+# symbol lookup). It changes nothing in the build; edit freely.
+#
+# Format: one entry per line, `ADDR  name` (ADDR hex, 0x optional). Blank lines
+# and # comments are ignored. Names are analyst-assigned (not official IW
+# symbols); where identity is uncertain it is noted inline.
+#
+# Provenance: a review of the multiplayer's network code against the known
+# IW4 vulnerabilities (docs/security.md lists the fixes). Most were pinned by decoding string-compare immediates, data-global xrefs, and
+# the call graph.
+#
+# The last section is imported from codxe's TU6 multiplayer table.
+
+# --- Server connectionless (OOB) dispatch ---
+822C2220  SV_ConnectionlessPacket       # the real dispatcher (network_map's 822C19D0 is SVC_Status)
+822C19B0  SVC_Status
+822C1D80  SVC_Info
+822BA9B8  SV_GetChallenge               # "getchallenge" handler
+822BD218  SV_DirectConnect              # "connect" handler
+822BABA8  SV_OOB_Stats                  # "stats" handler
+822BAFF8  SV_OOB_IHear                  # "ihear" voice-connectivity handler
+822BB098  SV_OOB_ICantHear              # "icanthear" voice-connectivity handler
+822C5A60  SV_ConnectionRateDispatch     # mrate/mack/mhack/mtoack fall-through
+822C56A0  SV_OOB_Mrate
+822C5840  SV_OOB_Mack
+822C5950  SV_OOB_Mhack
+822C59C0  SV_OOB_Mtoack
+
+# --- Server client-message / netchan ---
+822C24B0  SV_ExecuteClientMessage       # reads serverId/message/reliable acks; reliable-ack freeze guards
+822BCB18  SV_ParseClientMessage         # clc-op loop; decompresses into a 2048-byte stack buffer
+822BC510  SV_ExecuteClientCommand       # per reliable command; EXE_LOSTRELIABLECOMMANDS drop
+822BC778  SV_ClientThink                # refuses a command time > 20 s ahead (printed the client's name as a format); name from codxe
+823160A8  va                            # formats into a rotating buffer
+
+# --- Server reliable-command resend ---
+# Each loops for i = reliableAcknowledge+1 .. reliableSequence (client+0x20E54 /
+# +0x20E50); a bogus reliableAcknowledge makes the loop spin ~2^31 times.
+822C8D68  SV_UpdateServerCommandsToClient  # ordinary resend; regular send path (callers 822BBAA8/822C93B0/822C9730)
+822C8E78  SV_ResendReliableCommands        # message-overflow-recovery resend (via 822C9430); has an overflow break
+822C8F50  SV_DumpPendingReliableCommands   # Com_Printfs every pending command, no break (via 822C9430) -- the unbounded spin
+822C9430  SV_SendReliableOnOverflow        # (name a guess) calls the two above on a message overflow for client state 1/5
+822BC838  SV_CanAddReliableCommand         # (name a guess) reliable-room gate; reads ack only for a seq-ack vs 128 check
+822C90E8  SV_WriteSnapshotToClient         # (name a guess) resets reliableAcknowledge = reliableSequence; builds the snapshot
+822C1608  SV_AddServerCommand              # queues a reliable command; drops the client when seq-ack reaches 129 (name inferred from that)
+
+# --- Message / Huffman (msg module) ---
+822897C0  MSG_ReadBitsCompress          # Huffman decompress; no output bound
+82289750  MSG_WriteBitsCompress         # Huffman compress
+82285F18  Huffman_DecodeSymbol          # decode one symbol from the bitstream (iw4x: Huff_offsetReceive)
+8228D740  MSG_initHuffman
+822893E0  MSG_Init
+
+# --- Client connectionless (OOB) dispatch ---
+82188DD0  CL_ConnectionlessPacket
+8218ADB8  CL_ServerInfoPacket           # "infoResponse" (network_map's 8218ADB0 is off by 8)
+82184B88  CL_HandleRelayPacket          # "relay"; unauthenticated forward
+82191DF0  CL_ForwardRelayPacket         # the relay forwarder
+82191A90  CL_VoiceConnectionTestPacket  # "vt"; talker index bounded [0,18)
+82190388  CL_VoiceFailPacket            # "voicefail"
+8213B4E8  CL_ParseMessage_badclcstate   # references "bad clcState"; distinct from the decompress parser 8218DF10 (identity not fully settled)
+8218DF10  CL_ParseServerMessage         # decompresses into a 64 KB hunk buffer
+
+# --- Client host-migration ---
+8218BDF8  CL_MigrationPacketDispatch    # mstart/mdata/ping/pinga/mhead/mstate
+8218BA58  PartyMigrate_HandleData       # "mdata"; bounds-checked reassembly
+
+# --- Party OOB dispatch ---
+8219D778  Party_ConnectionlessPacket    # leading-digit + 3 sub-dispatchers
+821A4018  PartyHost_PacketDispatch
+821A8150  PartyMigrate_PacketDispatch   # findbest/nominee/migrateto/nomigrate/sessinfo
+8219B810  PartyClient_PacketDispatch
+821A6950  PartyHost_HandleJoinPartyRequest  # CVE-2019-20893; unbounded count -> stack overflow
+821A6F48  PartyHost_HandleMemberJoin
+8219A580  PartyClient_HandleNewLobbyInfo
+8219AD98  PartyClient_HandlePartyState
+
+# --- Party session slot count ---
+# session+556 public / +552 private slots; their sum bounds the member-index walk.
+823918D8  Session_Create                # (name a guess) prints "Calling XSessionCreate as a client"; stores the slot counts
+82391B18  Session_Modify                # (name a guess) prints "Modifying session to set publicSlots"; stores the slot counts
+82390FF0  Party_GetMaxPlayers           # returns [552]+[556]; name from iw4x
+8219C818  Party_FindMemberByAddr        # (name a guess) member scan, bounded [0,18); falls back to 8219C6D8
+8219C6D8  Party_FindMemberBySlotTotal   # (name a guess) fallback walk bounded by the slot total, not by 18
+
+# --- UI / HUD ---
+822F0230  UI_ReplaceDirective           # 256-byte directive-name stack buffer, unbounded
+822F0140  UI_LookupDirective            # resolves a directive name to a value
+823159B0  I_strncpyz                    # bounded string copy, null-terminates at size-1
+8227F5E0  Com_PrintError                # channelled printf, prefixes "^1Error: " and calls Com_PrintMessage (8227F370)
+
+# --- NET loopback / defer ---
+8228E948  NET_DeferPacketToClient       # unchecked memcpy into 1264-byte ring slot
+8228E9E8  NET_SendLoopPacket
+8228E8C8  NET_SendLoopPacketGlobal
+
+# --- Game: userinfo / chat / score / commands ---
+822BBED8  SV_UserinfoChanged
+8221B890  G_ClientUserinfoChanged       # iw4x: ClientUserinfoChanged
+82225950  G_Say
+82225770  G_SayTo
+822502A0  GScr_LogPrint                 # passes a script string as the format
+822323B8  G_LogPrintf                   # inert `blr` stub in this build
+82231F10  G_GetClientScore              # null level.clients -> crash
+82231F28  G_SetClientScore
+8225B918  Svcmd_EntityList_f            # client-reachable debug command, bounded
+822266D0  ClientCommand
+82171790  CL_RunActiveAction            # executes the activeAction dvar as console text
+
+# --- Dvar set path ---
+822DCCC0  CL_SelectStringTableEntryInDvar_f  # sets an arbitrary dvar, no flag check
+8230FD50  Dvar_SetStringByName          # registers an "External Dvar" if absent; name from iw4x
+8230F540  Dvar_SetString_Internal
+8230D580  Dvar_SetVariant
+
+# --- LSP ---
+8239C4F8  LSP_SendHello
+
+# --- Voice (in-band, over the VDP/game socket) ---
+82192518  CL_HandleVoicePacket          # parses an inbound voice packet: talker [0,18), numPackets (0,40], 10-byte frames
+821AD948  Voice_SubmitIncomingData      # hands a constant-10-byte frame to the XHV engine (per-talker slot)
+# (CL_VoiceConnectionTestPacket "vt" @82191A90 is listed above; it shares the "invalid talker" string.)
+# 823B3798 is a label inside sub_823B3720, a bounded list-removal (count at +8,
+# memmove tail), not a voice copy. The receive path (82192518 -> 821AD948) is
+# bounded by constants.
+
+# --- From codxe (~/git/codxe, MIT: src/game/iw4/mp_tu6/symbols.h and
+# components/fastfiles.cpp) ---
+# Names as codxe gives them, not checked one by one. Every function address
+# below is a recompiled function start in ppc_mp/.
+820FE5F0  BG_PlayerHasWeapon
+821142C0  BG_GetWeaponCompleteDef
+821143F0  BG_GetNumWeapons
+82116638  BG_ComputeAndApplyWeaponMovement_IdleAngles
+82118198  BG_CalculateViewMovement_Angles_Idle
+82129270  CG_DrawActive
+8213DE18  CG_GetPredictedPlayerState
+8213DE38  CG_GameMessage
+821735C0  Con_Init
+821754B8  CL_ConsolePrint
+82176F48  Con_CycleAutoComplete
+82177038  Con_CancelAutoComplete
+82177090  Con_AllowAutoCompleteCycling
+82177528  Con_ToggleConsoleOutput
+821779C8  Con_PageUp
+82177A30  Con_PageDown
+82177A78  Con_Top
+82177AB8  Con_Bottom
+82177AD8  Con_Close
+82177C38  Con_IsActive
+82177D10  Con_ToggleConsole
+8217E540  CL_CreateNewCommands
+8217FA98  Field_AdjustScroll
+82181AA0  Key_IsCatcherActive
+82181AC8  Key_AddCatcher
+82181AE8  Key_RemoveCatcher
+82181B20  Key_SetCatcher
+82181DB8  Field_KeyDownEvent
+82182028  Field_CharEvent
+821821D0  Console_Key
+821826F8  CL_KeyEvent
+82182E60  CL_ConsoleCharEvent
+82182EC8  CL_CharEvent
+8218E800  SCR_DrawScreenField
+821AB790  ScrPlace_GetFullPlacement
+821AB7A0  ScrPlace_GetUnsafeFullPlacement
+821AEFD8  DB_GetXAssetName
+821AEFF8  DB_SetXAssetName
+821AFCB8  DB_LoadXFile
+821DE528  DB_LinkXAssetEntry1
+821E1C60  DB_LoadXAssets
+821E25B0  DB_FindXAssetHeader
+8221B238  GScr_AddFieldsForClient
+8221B290  Scr_SetClientField
+82223C18  PlayerCmd_GetGuid
+8223F4D0  GetEntity
+8223F540  GetPlayerEntity
+82254C38  Scr_GetFunction
+82254D88  Scr_GetMethod
+82259A60  Scr_AddEntity
+8225A698  Scr_SetGenericField
+8225A7B8  Scr_GetGenericField
+8225ABF0  Scr_GetObjectField
+82260C90  Weapon_RocketLauncher_Fire
+82261410  G_SelectWeaponIndex
+82275C60  Cbuf_AddText
+822760C8  SV_Cmd_ArgvBuffer
+82276758  Cmd_AddCommandInternal         # iw4x: Cmd_AddCommand
+82277928  Cmd_ExecuteSingleCommand
+82278048  Cmd_Init
+8227F370  Com_PrintMessage
+8227F448  Com_Printf
+822804F8  Com_InitDvars
+822963C0  Scr_RegisterFunction
+8229F2C8  Scr_AddSourceBuffer
+822A36E8  Scr_ShutdownSystem
+822A9B98  Scr_AddClassField
+822ADC88  Scr_GetNumParam
+822ADD18  Scr_AddInt
+822ADE98  Scr_AddUndefined
+822ADFF0  Scr_AddString
+822AE470  Scr_Error
+822AE600  Scr_ParamError
+822AE668  Scr_ObjectError
+822B2D70  Scr_GetInt
+822B30D0  Scr_GetFloat
+822B33A8  Scr_GetString
+822B35B8  Scr_GetVector
+822BDCB8  SV_AddTestClient
+822BDF00  SV_GameSendServerCommand
+822C2910  SV_CalcPings
+822C3208  SV_BotUserMove
+822C3B10  SV_IsClientBot
+822DA678  UI_DrawText
+822DAC70  UI_DrawBuildNumber
+822FDF08  Hunk_AllocateTempMemoryHighInternal  # iw4x: Hunk_AllocateTempMemoryHigh
+8230EE00  Dvar_RegisterBool
+8230EE90  Dvar_RegisterFloat
+8230F010  Dvar_RegisterString
+8230F7D8  Dvar_SetString
+82315B70  I_stricmp
+82315F20  Com_sprintf
+823167D8  Info_SetValueForKey
+82319928  Sys_CreateFile
+823401C8  Sys_Milliseconds
+823C2798  R_RegisterFont
+823C28F8  R_TextHeight                  # codxe calls it R_TextWidth; matches PC R_TextHeight, R_TextWidth is 823C2808
+823C2FF8  Material_RegisterHandle
+823C6DB0  R_AddCmdDrawStretchPic
+823C7690  R_AddCmdDrawText
+823DDD78  R_CheckDvarModified
+
+# Data globals (codxe):
+82027518  fields
+82442298  g_assetNames
+82442588  g_poolSize
+82442828  DB_XAssetPool
+824C5B64  cgArray
+824DF4A8  con
+82502FF8  g_consoleField
+82503118  playerKeys
+825065B8  historyEditLines
+825A5918  clientUIActives
+825A8B6C  clients
+82678600  g_load
+827ADAE4  g_zoneIndex
+82839700  g_assetEntryPool
+829D8048  g_zones
+82DFD010  gameWorldMp
+82E2A580  g_entities
+82FF2F08  level
+83052680  cm
+8367A010  svsHeader
+836A3AC0  sharedUiInfo
+
+# --- Matched from iw4x (~/git/iw4x-client, GPL; names from src/Game/*.cpp) ---
+# iw4x names functions of the 32-bit PC multiplayer (iw4x.exe, 1.2.211, from
+# iw4x-rawfiles v0.2.37). Each was carried to TU6 by matching the PC function
+# against this image: "strings" = same string literals (weighted, mutual best);
+# "call graph" = same position in the ordered callee lists of an already matched
+# caller. Checked against 47 names the map had from other sources: all agreed
+# once two errors in those sources were fixed; one propagation error was found
+# by reading (BG_GetEquippedWeaponIndex). Expect a few percent wrong, more among
+# "call graph" entries whose function has no strings. A tiny TU6 body is
+# usually a tail-call thunk (`b` to the real function), as on PC.
+820FE530  BG_GetEquippedWeaponIndex     # pc 4D8BA0, call graph
+82100290  BG_GetEntityTypeName          # pc 43A0E0, strings
+8210B488  PMoveSingle                   # pc 5743E0, call graph
+8210CEE8  BG_GetEquippedWeaponState     # pc 4E79E0, call graph
+821142A8  BG_GetWeaponDef               # pc 440EB0, call graph
+821142D8  BG_GetWeaponName              # pc 4E6EC0, call graph
+821143B0  BG_GetViewModelWeaponIndex    # pc 4BE4D0, call graph
+82114F10  BG_IsWeaponValid              # pc 415BA0, call graph
+821293B8  CG_DrawDisconnect             # pc 454A70, strings
+82133670  CG_PlayBoltedEffect           # pc 430E10, call graph
+82136C80  MSG_ReadBit                   # pc 476D20, call graph
+82136D48  MSG_ReadBits                  # pc 4C3900, call graph
+8216A0B0  CG_SetupWeaponConfigString    # pc 4BD520, strings
+8216F488  CG_LocationalTrace            # pc 48B1D0, call graph
+82170388  CL_GetSnapshot                # pc 46B7C0, strings
+82170A30  CL_GetConfigString            # pc 44ADB0, call graph
+82170B90  CL_DrawStretchPicPhysical     # pc 4FC120, call graph
+82171D68  CL_IsCgameInitialized         # pc 43EB20, call graph
+82175538  CL_ConsoleFixPosition         # pc 44A430, call graph
+82176E78  Con_IsDvarCommand             # pc 5A3FF0, strings
+82179870  CL_AddDebugStarWithText       # pc 4D03C0, call graph
+82181D28  Field_Draw                    # pc 4F5B40, call graph
+821830B8  CL_AddReliableCommand         # pc 454F40, call graph
+821875F0  CL_DownloadsComplete          # pc 42CE90, strings
+82189C30  CL_ConnectFromParty           # pc 433D30, call graph
+8218D108  CL_ParseSnapshot              # pc 5ABD40, strings
+8218D860  CL_ParseGamestate             # pc 5AC250, call graph
+8218E298  CL_GetRankForXP               # pc 4FF8A0, strings
+8218E450  CL_GetRankIcon                # pc 4A7B30, strings
+8218FAF0  CL_GetClientName              # pc 4563D0, call graph
+82197F48  PartyHost_CountMembers        # pc 497330, call graph
+8219D698  Party_InParty                 # pc 4F10C0, call graph
+821A0D28  PartyHost_GetMemberName       # pc 44BE90, call graph
+821AB248  ScrPlace_ApplyRect            # pc 454E20, call graph
+821AB7E0  ScrPlace_GetActivePlacement   # pc 4F8940, call graph
+821AF030  DB_GetXAssetTypeName          # pc 4CFCF0, call graph
+821B0A40  DB_ReadXFileUncompressed      # pc 4705E0, call graph
+821DD088  Sys_Sleep                     # pc 4169C0, call graph
+821DD910  DB_EnumXAssets_Internal       # pc 5BB0A0, call graph
+821DE030  DB_IsXAssetDefault            # pc 48E6A0, call graph
+821DF7B8  DB_GetRawFileLen              # pc 4DAA80, call graph
+821E2498  DB_GetRawBuffer               # pc 4CDC50, strings
+82216E40  Bullet_Fire                   # pc 4402C0, call graph
+8222D3F8  Add_Ammo                      # pc 4E1480, call graph
+8222E140  G_GetItemClassname            # pc 492630, strings
+8222F2C0  G_SpawnItem                   # pc 403770, call graph
+822303F0  Touch_Item                    # pc 44FA20, strings
+82231EE0  SV_GameClientNum_Score        # pc 469AC0, call graph
+822337D8  G_TraceCapsule                # pc 42CE50, call graph
+8224E938  GScr_LoadGameTypeScript       # pc 4ED9A0, strings
+8224EF30  Scr_ConstructMessageString    # pc 45F940, strings
+82255150  Scr_GetGameTypeNameForScript  # pc 462460, call graph
+822551D8  Scr_IsValidGameType           # pc 4F1B60, call graph
+82259CC0  Scr_Notify                    # pc 4A4750, call graph
+8225A968  G_SpawnEntitiesFromString     # pc 4D8840, call graph
+8225AAE0  Scr_SetObjectField            # pc 4F20F0, strings
+8225D060  G_LocalizedStringIndex        # pc 4582F0, strings
+8225E730  G_PrintEntities               # pc 4E6A50, strings
+8225E818  G_Spawn                       # pc 4226F0, call graph
+8225EAF0  G_FreeEntity                  # pc 44C9D0, call graph
+8225ED08  G_AddEvent                    # pc 469A50, call graph
+8225EF80  G_GetEntityTypeName           # pc 4EB810, call graph
+8225FAD8  G_TempEntity                  # pc 4511F0, call graph
+822613E8  G_GetWeaponIndexForName       # pc 49E540, call graph
+822617F8  BG_TakePlayerWeapon           # pc 41FEC0, call graph
+822619F0  G_GivePlayerWeapon            # pc 4B38B0, strings
+82275D88  Cbuf_InsertText               # pc 4940B0, strings
+82275E80  Cmd_AddServerCommand          # pc 4DCE00, strings
+82276688  SV_Cmd_TokenizeString         # pc 4B5780, call graph
+822766A8  SV_Cmd_EndTokenizedString     # pc 464750, call graph
+82277D90  Cbuf_Execute                  # pc 4E2C80, call graph
+82278B30  FS_Read                       # pc 4A04C0, call graph
+82278C50  Com_LoadInfoString            # pc 463500, call graph
+8227CE78  LiveStorage_SetStat           # pc 4CC5D0, call graph
+8227F540  Com_DPrintf                   # pc 413490, call graph
+8227F708  Com_PrintWarning              # pc 4E0200, strings
+82281B58  Field_Clear                   # pc 437EB0, call graph
+82281E98  Com_SyncThreads               # pc 464A60, call graph
+82281FA0  Com_Error                     # pc 4B22D0, strings
+82282268  Com_Quit_f                    # pc 4D4000, strings
+82289500  MSG_Discard                   # pc 4F56D0, call graph
+82289830  MSG_WriteByte                 # pc 48C520, call graph
+82289868  MSG_WriteData                 # pc 4F4120, call graph
+822898C8  MSG_WriteShort                # pc 503B90, call graph
+822898F8  MSG_WriteLong                 # pc 41CA20, call graph
+82289A70  MSG_WriteString               # pc 463820, strings
+82289CD8  MSG_ReadByte                  # pc 4C1C20, call graph
+82289D60  MSG_ReadShort                 # pc 40BDD0, call graph
+82289E50  MSG_ReadLong                  # pc 4C9550, call graph
+8228A0A0  MSG_ReadInt64                 # pc 4F1850, call graph
+8228A330  MSG_ReadBigString             # pc 60E2B0, call graph
+8228A410  MSG_ReadStringLine            # pc 4FEF30, call graph
+8228A560  MSG_ReadData                  # pc 4527C0, call graph
+8228B2C0  MSG_ReadDeltaUsercmdKey       # pc 491F00, strings
+8228D7C0  NET_AdrToString               # pc 469880, call graph
+8228E5B0  NET_CompareAdr                # pc 4D0AA0, call graph
+8228E628  NET_IsLocalAddress            # pc 402BD0, call graph
+8228EBF0  Sys_SendPacket                # pc 60FDC0, strings
+8228EE28  NET_OutOfBandPrint            # pc 4AEF00, strings
+8228EF80  NET_OutOfBandData             # pc 49C7E0, strings
+8228F0C0  NET_OutOfBandVoiceData        # pc 4FCC90, call graph
+8228F1B0  NET_StringToAdr               # pc 409010, call graph
+8228F3F8  XNAddrToString                # pc 452690, strings
+82292BA0  Sys_IsServerThread            # pc 4B0270, call graph
+82292DA8  Sys_IsDatabaseReady2          # pc 441280, call graph
+82292EE8  Sys_IsDatabaseThread          # pc 4C6020, call graph
+82292F20  Sys_IsMainThread              # pc 4C37D0, call graph
+8229DAB8  ScriptCompile                 # pc 426B80, call graph
+8229DF08  Scr_GetFunctionHandle         # pc 4234F0, call graph
+8229E490  Scr_LoadScript                # pc 45D940, call graph
+8229F7E0  Scr_ShutdownAllocNode         # pc 441650, call graph
+822A2418  SL_ConvertToString            # pc 4EC1D0, call graph
+822A28B0  SL_FindString                 # pc 434EE0, call graph
+822A28D8  SL_FindLowercaseString        # pc 4C63E0, call graph
+822A2DE8  SL_GetString_                 # pc 47E310, call graph
+822A2E18  SL_GetString                  # pc 4CDC10, call graph
+822A2FB8  SL_AddRefToString             # pc 4D9B00, call graph
+822A34F8  Scr_CreateCanonicalFilename   # pc 4A0220, call graph
+822A3560  SL_RemoveRefToString          # pc 47CD70, call graph
+822A3938  TempMalloc                    # pc 4613A0, call graph
+822A41B8  AllocObject                   # pc 434320, call graph
+822A4308  AllocThread                   # pc 4F78C0, call graph
+822A43E0  AddRefToObject                # pc 61C360, call graph
+822A45D8  RemoveRefToValue              # pc 48E170, call graph
+822A4748  FindVariable                  # pc 4AB650, call graph
+822A4D58  GetObject                     # pc 48B9D0, call graph
+822A4E18  FindObject                    # pc 4CF2F0, call graph
+822A7880  GetVariable                   # pc 419970, call graph
+822A78D8  GetNewVariable                # pc 4CC520, call graph
+822A7B70  RemoveVariable                # pc 480B40, call graph
+822A9C70  Scr_GetEntityId               # pc 4165E0, call graph
+822AA208  RemoveRefToObject             # pc 437190, call graph
+822ABC68  Scr_ErrorInternal             # pc 61DB10, call graph
+822ABD08  Scr_ClearOutParams            # pc 4386E0, call graph
+822AD850  Scr_FreeThread                # pc 4BD320, call graph
+822AD9E0  Scr_IsSystemActive            # pc 4B24E0, call graph
+822ADD98  Scr_AddFloat                  # pc 61E860, call graph
+822ADF08  Scr_AddObject                 # pc 430F40, call graph
+822AE110  Scr_AddConstString            # pc 488860, call graph
+822AE2B0  Scr_MakeArray                 # pc 437280, call graph
+822AE328  Scr_AddArray                  # pc 45CE80, call graph
+822B27C0  VM_Execute_0                  # pc 6222A0, strings
+822B29A0  Scr_ExecThread                # pc 4AD0B0, call graph
+822B31D8  Scr_GetConstString            # pc 494830, call graph
+822B38A8  Scr_GetObject                 # pc 462100, call graph
+822B39F0  Scr_GetType                   # pc 422900, call graph
+822B3A58  Scr_GetTypeName               # pc 4EFF10, call graph
+822B3AD0  Scr_GetPointerType            # pc 4828E0, call graph
+822B87B8  SV_GetPlayerByName            # pc 6242B0, strings
+822B88F0  SV_GetPlayerByNum             # pc 624390, strings
+822BAD20  SV_GetClientPersistentDataBuffer  # pc 4014C0, call graph
+822BAD48  SV_GetClientPersistentDataModifiedFlags  # pc 4F4AC0, call graph
+822BB540  SV_DropClient                 # pc 4D1600, strings
+822BCCB8  SV_IsTestClient               # pc 4D6E40, call graph
+822BE178  SV_SetBrushModel              # pc 466830, call graph
+822BF4C8  SV_GetConfigstringConst       # pc 468500, call graph
+822C17E0  SV_SendServerCommand          # pc 4255A0, call graph
+822C1918  SV_FindClientByAddress        # pc 44F450, call graph
+822C4128  SV_WaitServer                 # pc 4256F0, call graph
+822CA140  SV_UnlinkEntity               # pc 504210, call graph
+822CBF88  SEH_StringEd_GetString        # pc 44BB30, call graph
+822CCDF0  SEH_ReadCharFromString        # pc 486560, call graph
+822CCEF8  UI_DrawHandlePic              # pc 4D0EA0, call graph
+822D8798  UI_ParseInfos                 # pc 4027A0, strings
+822D8AA8  UI_SortArenas                 # pc 630AE0, call graph
+822D8C00  UI_UpdateArenas               # pc 4A95B0, strings
+822DA5A8  UI_TextWidth                  # pc 6315C0, call graph
+822DA610  UI_TextHeight                 # pc 4C8630, call graph
+822DA9F8  UI_GetFontHandle              # pc 4AEA60, call graph
+822DF2E0  UI_CheckStringTranslation     # pc 4FB010, strings
+822DF3F0  UI_SafeTranslateString        # pc 4F1700, call graph
+822DF5E0  UI_ReplaceConversions         # pc 4E9740, call graph
+822DFFE8  UI_GetMapDisplayName          # pc 420700, call graph
+822E0218  UI_GetGameTypeDisplayName     # pc 4EB0B0, call graph
+822E6F88  Menu_Setup                    # pc 415AD0, call graph
+822E7EC8  Menus_MenuIsInStack           # pc 47ACB0, call graph
+822E7F08  Menus_FindByName              # pc 487240, call graph
+822EE7F0  Menu_IsVisible                # pc 4D77D0, strings
+822EF328  Menus_CloseRequest            # pc 430D50, call graph
+822EF4B8  Menus_CloseAll                # pc 4BA5B0, call graph
+822F0020  Menus_OpenByName              # pc 4CCE60, call graph
+822F2200  UI_AddMenuList                # pc 4533C0, call graph
+822F4180  UI_LoadMenus                  # pc 641460, call graph
+822F55B8  Dvar_InfoString_Big           # pc 4D98A0, call graph
+822F6610  FS_FOpenFileReadForThread     # pc 643270, call graph
+822F6720  FS_Printf                     # pc 459320, call graph
+822F6730  FS_ReadFile                   # pc 4F4B90, call graph
+822F67E0  FS_FreeFile                   # pc 4416B0, call graph
+822F68C8  FS_FOpenFileByMode            # pc 4C0700, call graph
+822F6C68  RandWithSeed                  # pc 495580, call graph
+822F7158  Vec3Normalize                 # pc 453500, call graph
+822F7718  Vec2Normalize                 # pc 416F70, call graph
+822F7B20  vectoryaw                     # pc 45AD10, call graph
+822FA410  AngleNormalize360             # pc 438DC0, call graph
+822FD168  AngleVectors                  # pc 4691A0, call graph
+822FD978  CopyStringInternal            # pc 4F3C80, call graph
+822FD9A8  Free_String                   # pc 470E80, call graph
+822FE598  LargeLocalReset               # pc 430630, call graph
+822FE7B0  Hunk_UserAlloc                # pc 45D1C0, strings
+822FEE80  Key_SetBinding                # pc 494C90, call graph
+822FFC10  Live_GetMapIndex              # pc 4F6440, call graph
+82300998  StringTable_LookupRowNumForValue  # pc 4AC180, strings
+82300A80  StringTable_GetColumnValueForRow  # pc 4F2C80, strings
+82300B98  StringTable_Lookup            # pc 42F0E0, strings
+82300D48  StringTable_HashString        # pc 475EB0, call graph
+82302D70  StructuredDataDef_GetAsset    # pc 4D5C50, strings
+8230C920  Dvar_DisplayableValue         # pc 4B5530, call graph
+8230DAC0  Dvar_FindVar                  # pc 4D5390, call graph
+8230DD98  Dvar_GetString                # pc 4EC6B0, call graph
+8230DE18  Dvar_GetVariantString         # pc 4C47E0, call graph
+8230DF88  Dvar_GetUnpackedColorByName   # pc 406530, call graph
+8230EE48  Dvar_RegisterInt              # pc 479830, call graph
+8230EED8  Dvar_RegisterVec2             # pc 4F6070, call graph
+8230EF20  Dvar_RegisterVec3             # pc 4EF8E0, call graph
+8230EF70  Dvar_RegisterVec3Color        # pc 4918B0, call graph
+8230EFC0  Dvar_RegisterVec4             # pc 471500, call graph
+8230F058  Dvar_RegisterEnum             # pc 412E40, call graph
+8230F0C0  Dvar_RegisterColor            # pc 4F28E0, call graph
+8230F748  Dvar_SetBool                  # pc 4A9510, call graph
+8230F7B0  Dvar_SetInt                   # pc 421DA0, call graph
+8230F7B8  Dvar_SetFloat                 # pc 40BB20, call graph
+8230F900  Dvar_SetBoolByName            # pc 45C4D0, call graph
+8230FA40  Dvar_SetFloatByName           # pc 466320, strings
+8230FEB8  Dvar_SetFromStringByNameFromSource  # pc 4FC770, call graph
+8230FF38  Dvar_SetFromStringByName      # pc 4F52E0, call graph
+8230FF68  Dvar_Reset                    # pc 4FEFD0, call graph
+82310AC0  Dvar_SetCommand               # pc 4EE430, call graph
+823137E8  Sys_IsRenderThread            # pc 4B20E0, call graph
+823139E8  Com_BeginParseSession         # pc 4AAB80, strings
+82313AC8  Com_EndParseSession           # pc 4B80B0, call graph
+82314828  Com_Parse                     # pc 474D60, call graph
+82314890  Com_ParseOnLine               # pc 4C0350, call graph
+82314AE8  Com_SkipRestOfLine            # pc 4B8300, call graph
+82315890  I_isdigit                     # pc 4E71E0, call graph
+82315E80  I_CleanStr                    # pc 4AD470, call graph
+82316230  Info_ValueForKey              # pc 47C820, call graph
+82316770  Info_Validate                 # pc 436AE0, call graph
+82317FB8  ParseConfigStringToStruct     # pc 403B60, call graph
+82319158  RMesg_SendMessages            # pc 49CC30, strings
+8231A118  Sys_EnterCriticalSection      # pc 4FC200, call graph
+8231A130  Sys_LeaveCriticalSection      # pc 41B8C0, call graph
+8231D8C8  CG_GetBoneIndex               # pc 504F20, call graph
+823383E8  Live_GetPrestige              # pc 430F90, strings
+8233D140  Sys_QueEvent                  # pc 497DE0, strings
+82393CF8  PartyHost_GetMemberAddressBySlot  # pc 44E100, call graph
+823A64D8  SND_Init                      # pc 46A630, strings
+823C27A8  R_NormalizedTextScale         # pc 5056A0, call graph
+823C2808  R_TextWidth                   # pc 5056C0, call graph
+823C3218  Material_Process2DTextureCoordsForAtlasing  # pc 506090, call graph
+823DAB10  R_Cinematic_StartPlayback_Now # pc 51C5B0, strings
