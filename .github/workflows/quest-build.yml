@@ -1,0 +1,199 @@
+# Quest/VR port: builds the campaign TU0 APK from YOUR OWN copy of the game, saves every log.
+#
+# Written against the repository's own build.sh, android/app/build.gradle.kts and
+# .github/workflows/android.yml (commit 1c62070c). NOT YET RUN. Step 1 is to run it with xr=off:
+# that is the unmodified upstream baseline (with the three/four VR patches applied but switched
+# off by MW2_XR). Only when that is green, run it again with xr=on.
+#
+# Needs (see BUILD_INSTRUCTIONS.md): Actions enabled on your fork, and links to your own
+# default.xex + default_mp.xex (or a disc image), as workflow inputs or as repository secrets
+# GAME_ARCHIVE_URL / DEFAULT_XEX_URL / DEFAULT_MP_XEX_URL / ISO_URL.
+name: quest-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      archive_url:     { description: "Link to one zip/7z holding default.xex and default_mp.xex", required: false, default: "" }
+      default_xex_url: { description: "Link to default.xex on its own",    required: false, default: "" }
+      default_mp_xex_url: { description: "Link to default_mp.xex on its own", required: false, default: "" }
+      iso_url:         { description: "Link to the disc image instead (large)", required: false, default: "" }
+      xr:
+        description: "off = baseline. on = MW2_XR=ON (OpenXR layer; fetches the Khronos loader)"
+        type: choice
+        options: ["off", "on"]
+        default: "off"
+      build_type:
+        type: choice
+        options: [debug, release]
+        default: debug
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: "28.2.13676358"
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_MAXSIZE: 5G
+  CCACHE_COMPILERCHECK: content
+  CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make room on the disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL || true
+          sudo apt-get clean
+          df -h / | tail -1
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 ninja-build ccache cmake python3 p7zip-full
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" --install "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Fetch libadrenotools
+        run: ./android/fetch_deps.sh
+
+      - name: Fetch your game executables
+        id: fetch
+        env:
+          ARCHIVE_URL: ${{ inputs.archive_url || secrets.GAME_ARCHIVE_URL }}
+          XEX_URL: ${{ inputs.default_xex_url || secrets.DEFAULT_XEX_URL }}
+          MP_URL: ${{ inputs.default_mp_xex_url || secrets.DEFAULT_MP_XEX_URL }}
+          ISO_URL: ${{ inputs.iso_url || secrets.ISO_URL }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          links=()
+          for pair in "archive=$ARCHIVE_URL" "image=$ISO_URL" "default.xex=$XEX_URL" "default_mp.xex=$MP_URL"; do
+            url=${pair#*=}; name=${pair%%=*}
+            if [ -n "$url" ]; then
+              echo "::add-mask::$url"
+              case "$name" in archive|image) links+=("$url") ;; *) links+=("$name=$url") ;; esac
+            fi
+          done
+          [ ${#links[@]} -gt 0 ] || { echo "::error::No link to your game files was given."; exit 1; }
+          required=(--require default.xex,default_mp.xex)
+          [ -n "$ISO_URL" ] && required=()
+          python3 tools/fetch_asset.py --into mw2 --github-output "${required[@]}" "${links[@]}"
+          # TU0 = the disc's own executables: build.sh VERSION=tu0 reads them from mw2/tu0/
+          if [ -f mw2/default.xex ]; then
+            mkdir -p mw2/tu0
+            cp mw2/default.xex mw2/default_mp.xex mw2/tu0/
+            rm -f mw2/default.xex mw2/default_mp.xex mw2/default.pe mw2/default_mp.pe
+          fi
+
+      - name: Restore the recompiled tree
+        id: ppc_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ppc_tu0
+          key: ppc_tu0-sp-${{ steps.fetch.outputs.assets_key }}-${{ hashFiles('build.sh', 'patches/**', 'config/*.toml', 'tools/genshared.py', 'tools/gen_kernel_stubs.py') }}
+
+      - name: Recompile the campaign executable (VERSION=tu0)
+        if: steps.ppc_cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          iso=""; [ -f mw2/game.iso ] && iso="ISO=mw2/game.iso"
+          env $iso VERSION=tu0 RECOMPILE_ONLY=1 TITLE=sp ./build.sh 2>&1 | tee logs/recompile.log
+          cp -f logs-analyse-*.txt logs-recomp-*.txt logs/ 2>/dev/null || true
+
+      - name: Let go of the game files
+        run: rm -rf mw2
+
+      - name: Fetch the OpenXR loader (xr=on only)
+        if: inputs.xr == 'on'
+        run: |
+          set -euo pipefail
+          base=https://repo.maven.apache.org/maven2/org/khronos/openxr/openxr_loader_for_android
+          ver=$(curl -fsSL "$base/maven-metadata.xml" | sed -n 's|.*<release>\(.*\)</release>.*|\1|p')
+          echo "OpenXR loader AAR: $ver"
+          curl -fsSL -o oxr.aar "$base/$ver/openxr_loader_for_android-$ver.aar"
+          mkdir oxr && unzip -q oxr.aar -d oxr
+          inc=$(find oxr -type d -path '*include/openxr' | head -1)
+          so=$(find oxr -name libopenxr_loader.so -path '*arm64-v8a*' | head -1)
+          [ -n "$inc" ] && [ -n "$so" ] || { echo "::error::AAR layout not as expected"; find oxr | head -50; exit 1; }
+          mkdir -p third_party/openxr/include third_party/openxr/lib/arm64-v8a
+          cp -r "$inc" third_party/openxr/include/
+          cp "$so" third_party/openxr/lib/arm64-v8a/
+          echo "OpenXR loader AAR version $ver" > logs-openxr-version.txt
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-quest-${{ inputs.xr }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-quest-${{ inputs.xr }}-
+            ccache-quest-
+
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.11.1" }
+
+      - name: Build (gradle)
+        working-directory: android
+        env:
+          MW2_NDK_VERSION: ${{ env.NDK_VERSION }}
+          MW2_NATIVE_OPTIMISATION: -O2
+          MW2_COMPILER_LAUNCHER: ccache
+          MW2_XR: ${{ inputs.xr == 'on' && '1' || '' }}
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          case "${{ inputs.build_type }}" in release) b=Release ;; *) b=Debug ;; esac
+          echo "gradle assembleCampaignTu0$b   (MW2_XR='${MW2_XR}')"
+          gradle --no-daemon --stacktrace --info "assembleCampaignTu0$b" 2>&1 | tee "$GITHUB_WORKSPACE/logs/gradle.log"
+
+      - name: Save the compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-quest-${{ inputs.xr }}-${{ github.run_id }}
+
+      - name: Inspect the APK and collect everything
+        if: always()
+        run: |
+          mkdir -p dist logs
+          { echo "xr=${{ inputs.xr }} build_type=${{ inputs.build_type }} sha=${GITHUB_SHA}"; cat logs-openxr-version.txt 2>/dev/null || true; } > logs/build-report.txt
+          cp -f android/app/.cxx/*/*/*/arm64-v8a/*.log logs/ 2>/dev/null || true
+          find android/app/.cxx -name 'CMakeError.log' -o -name 'CMakeOutput.log' -o -name 'build_command.txt' 2>/dev/null | while read f; do cp "$f" "logs/$(echo "$f" | tr '/' '_')"; done
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          apk=$(find android/app/build/outputs/apk -name '*.apk' | head -1)
+          if [ -n "$apk" ]; then
+            cp "$apk" dist/
+            { echo "--- APK"; ls -l "$apk"; "$tools/apksigner" verify --verbose "$apk" 2>&1 | head -5
+              "$tools/aapt2" dump badging "$apk" 2>&1 | grep -E "^package:|sdkVersion:|native-code:|uses-feature"
+              unzip -l "$apk" | grep -E "lib/|AndroidManifest" ; sha256sum "$apk"; } >> logs/build-report.txt
+          else
+            echo "NO APK PRODUCED" >> logs/build-report.txt
+          fi
+          cat logs/build-report.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quest-build-logs-xr-${{ inputs.xr }}
+          path: logs/*
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quest-apk-xr-${{ inputs.xr }}
+          path: dist/*.apk
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
