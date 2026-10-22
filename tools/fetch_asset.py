@@ -565,7 +565,8 @@ def main():
 
         if not identify_and_place(path, wanted or name, arguments.into, placed, wanted):
             head_bytes = first_bytes(path, 4)
-            os.unlink(path)
+            os.unlink(path)if name.lower().endswith((".iso", ".img", ".bin")):
+    diagnose_disc_image(path)
             raise SystemExit(
                 f"    {name} is not an Xbox 360 executable, a disc image or an "
                 f"archive holding one. It starts with {head_bytes!r}."
