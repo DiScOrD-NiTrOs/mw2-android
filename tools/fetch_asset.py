@@ -292,17 +292,32 @@ def first_bytes(path, count=32):
     with open(path, "rb") as handle:
         return handle.read(count)
 
-
 def is_disc_image(path):
     try:
+        image_size = os.path.getsize(path)
         with open(path, "rb") as handle:
             for offset in XDVDFS_OFFSETS:
-                handle.seek(offset + 32 * SECTOR)
+                position = offset + 32 * SECTOR
+                if position + 20 > image_size:
+                    continue
+                handle.seek(position)
                 if handle.read(20) == XDVDFS_MAGIC:
                     return True
     except OSError:
         pass
     return False
+
+
+def diagnose_disc_image(path):
+    image_size = os.path.getsize(path)
+    say(f"    diagnostic: file size = {size_text(image_size)}")
+    with open(path, "rb") as handle:
+        for offset in XDVDFS_OFFSETS:
+            position = offset + 32 * SECTOR
+            handle.seek(position)
+            found = handle.read(20)
+            say(f"    offset 0x{position:X}: {found!r}")
+
 
 
 def sha256_of(path):
