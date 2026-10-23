@@ -123,7 +123,17 @@ jobs:
           # clang-18 builds XenonRecomp, which runs here. The NDK's own clang
           # builds the game, for the phone.
           sudo apt-get install -y clang-18 lld-18 ninja-build ccache cmake \
-                                  python3 p7zip-full
+           
+      - name: Show asset tool checksums
+        run: |
+          sha256sum tools/xdvdfs.py
+          sha256sum tools/fetch_asset.py
+          sha256sum tests/test_assets.py
+          wc -l tests/test_assets.py
+
+      - name: Test asset tools
+        run: python3 -m unittest discover -s tests -v
+                       python3 p7zip-full
 
       - name: Install the NDK
         run: |
