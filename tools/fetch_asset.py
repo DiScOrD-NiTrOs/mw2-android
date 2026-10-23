@@ -346,7 +346,6 @@ def xex_original_name(path):
             head = handle.read(1 << 20)
         if head[:4] != b"XEX2" or len(head) < 24:
             return None
-        import struct
         count = struct.unpack_from(">I", head, 20)[0]
         if count > 512:
             return None
